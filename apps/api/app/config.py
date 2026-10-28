@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Silero speech probability that counts as talking, and the pause that ends a caller's turn
     vad_threshold: float = 0.5
     vad_min_silence_ms: int = 600
+    # How long the caller must talk over Sofia before she stops; shorter sounds ("uhum", her own echo) don't count
+    barge_in_ms: int = 300
+    # One JSON line per voice turn with its timings; "" turns it off
+    voice_turn_log: str = str(REPO_ROOT / "data" / "voice-turns.jsonl")
 
     database_url: str = f"sqlite:///{(REPO_ROOT / 'data' / 'clinic.db').as_posix()}"
     clinic_timezone: str = "America/Sao_Paulo"

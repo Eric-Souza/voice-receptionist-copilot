@@ -8,12 +8,16 @@ the model is still writing the rest:
     {"type": "tool_result", "id", "name", "result"}        what the tool returned
     {"type": "error", "message"}                           the model call failed; the turn was dropped
     {"type": "done", "text"}                               the whole spoken reply for this turn
+
+The voice layer may cancel a turn midway when the caller talks over Sofia. Tools still run to the end and
+their results are recorded, so the history never disagrees with the database; Conversation.interrupt()
+then trims the reply to what the caller actually heard.
 """
 
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -23,7 +27,7 @@ from sqlmodel import Session
 
 from app.config import get_settings
 from app.db import new_session
-from app.llm import ChatModel
+from app.llm import ChatModel, ToolCall
 from app.prompts import system_prompt
 from app.tools import Pending, ToolContext, run_tool, tool_schemas
 
@@ -44,6 +48,39 @@ class Conversation:
     language: str = "pt"  # the language the call started in; the caller may switch
     turns: int = 0  # caller messages so far
     pending: dict[str, Pending] = field(default_factory=dict)  # changes waiting for the caller's yes
+    turn_start: int = 0  # where the latest caller turn begins in messages
+
+    def interrupt(self, heard: str) -> bool:
+        """The caller talked over the latest reply after hearing only `heard` (maybe nothing).
+
+        Rewrites the turn so the model knows where it was cut off, and drops changes proposed in it, since the
+        caller may not have heard them read back. Returns True if the turn was removed altogether because
+        nothing was said or done yet; the caller's words should then go in front of what they say next.
+        """
+        turn = self.messages[self.turn_start :]
+        if not turn:
+            return False
+        # A tool call batch without all its results would break the next request
+        answered = {m["tool_call_id"] for m in turn if m["role"] == "tool"}
+        for n, message in enumerate(turn):
+            if any(c["id"] not in answered for c in message.get("tool_calls") or []):
+                turn = turn[:n]
+                break
+        # What the model wrote but the caller never heard is replaced by what they did hear
+        turn = [
+            {**m, "content": None} if m.get("tool_calls") else m
+            for m in turn
+            if m["role"] != "assistant" or m.get("tool_calls")
+        ]
+        for action_id in [a for a, p in self.pending.items() if p.turn == self.turns]:
+            del self.pending[action_id]
+        if len(turn) == 1 and not heard:
+            del self.messages[self.turn_start :]
+            self.turns -= 1
+            return True
+        turn.append({"role": "assistant", "content": f"{heard}…" if heard else "…"})
+        self.messages[self.turn_start :] = turn
+        return False
 
 
 class Receptionist:
@@ -62,7 +99,7 @@ class Receptionist:
 
     async def respond(self, conversation: Conversation, user_text: str) -> AsyncIterator[Event]:
         history = conversation.messages
-        turn_start = len(history)
+        turn_start = conversation.turn_start = len(history)
         conversation.turns += 1
         history.append({"role": "user", "content": user_text})
         spoken: list[str] = []
@@ -110,11 +147,8 @@ class Receptionist:
                 )
                 for call in calls:
                     yield {"type": "tool_call", "id": call.id, "name": call.name, "arguments": _loads(call.arguments)}
-                    result = await asyncio.to_thread(self._run_tool, conversation, now, call.name, call.arguments)
+                    result = await _uninterrupted(self._record_tool(conversation, now, call))
                     yield {"type": "tool_result", "id": call.id, "name": call.name, "result": result}
-                    history.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": json.dumps(result, ensure_ascii=False)}
-                    )
             else:
                 log.warning("Turn hit max_tool_rounds=%s without a final reply", self.max_rounds)
         except Exception as exc:
@@ -128,10 +162,27 @@ class Receptionist:
             return
         yield {"type": "done", "text": " ".join(spoken)}
 
+    async def _record_tool(self, conversation: Conversation, now: datetime, call: ToolCall) -> dict[str, Any]:
+        result = await asyncio.to_thread(self._run_tool, conversation, now, call.name, call.arguments)
+        conversation.messages.append(
+            {"role": "tool", "tool_call_id": call.id, "content": json.dumps(result, ensure_ascii=False)}
+        )
+        return result
+
     def _run_tool(self, conversation: Conversation, now: datetime, name: str, arguments: str) -> dict[str, Any]:
         with self.session_factory() as session:
             ctx = ToolContext(session, now, conversation.turns, conversation.pending)
             return run_tool(ctx, name, arguments)
+
+
+async def _uninterrupted(coro: Awaitable[Any]) -> Any:
+    """Await coro to the end even if this task is cancelled meanwhile, then pass the cancellation on."""
+    task = asyncio.ensure_future(coro)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
 
 
 def _loads(arguments: str) -> Any:

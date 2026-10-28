@@ -55,3 +55,24 @@ async def test_falls_back_to_the_next_model_when_rate_limited():
 
     chunks = await collect(OpenAIChat(client_for(handler), "main", fallbacks=["backup"]))
     assert chunks == ["Oi!"] and asked == ["main", "backup"]
+
+
+async def test_a_rate_limited_model_is_skipped_until_its_retry_after():
+    asked = []
+
+    def handler(request):
+        model = json.loads(request.content)["model"]
+        asked.append(model)
+        if model == "main":
+            return httpx.Response(429, headers={"retry-after": "120"}, json={"error": {"message": "tokens per day"}})
+        return httpx.Response(200, text=sse({"content": "Oi!"}))
+
+    model = OpenAIChat(client_for(handler), "main", fallbacks=["backup"])
+    await collect(model)
+    await collect(model)
+    assert asked == ["main", "backup", "backup"]
+
+    # Once the wait is over, the main model is tried again
+    model.cooling_until["main"] = 0
+    await collect(model)
+    assert asked[-2:] == ["main", "backup"]

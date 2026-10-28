@@ -1,4 +1,8 @@
+import asyncio
 import json
+import time
+
+import pytest
 
 from app.agent import Conversation, Receptionist
 from tests.conftest import NOW
@@ -122,3 +126,55 @@ async def test_an_empty_reply_is_retried_once():
 async def test_a_failed_model_call_is_retried_once_before_any_output():
     events = await run(make(FlakyModel(["Oi!"])), Conversation(), "Oi")
     assert events[-1] == {"type": "done", "text": "Oi!"}
+
+
+PROPOSAL = [[("book_appointment", BOOKING)]], ["Então é um checkup quinta às 8h com a Dra. Ana, certo?"]
+
+
+async def test_interrupting_a_proposal_withdraws_it():
+    conversation = Conversation()
+    await run(make(ScriptedModel(*PROPOSAL)), conversation, "Ana Paula, 11 98765-4321")
+    assert conversation.pending
+
+    # The caller talked over the read-back, so they never agreed to it
+    assert conversation.interrupt("Então é um checkup quinta às 8h,") is False
+    assert not conversation.pending
+    assert [m["role"] for m in conversation.messages] == ["user", "assistant", "tool", "assistant"]
+    assert conversation.messages[1]["tool_calls"] and conversation.messages[1]["content"] is None
+    assert conversation.messages[-1] == {"role": "assistant", "content": "Então é um checkup quinta às 8h,…"}
+
+
+async def test_interrupting_before_anything_was_said_drops_the_turn():
+    conversation = Conversation([{"role": "assistant", "content": "Como posso ajudar?"}])
+    await run(make(ScriptedModel(["Claro! Qual serviço?"])), conversation, "Quero marcar")
+    assert conversation.interrupt("") is True
+    assert conversation.messages == [{"role": "assistant", "content": "Como posso ajudar?"}]
+    assert conversation.turns == 0
+
+
+async def test_cancelling_during_a_tool_still_records_its_result():
+    class SlowTools(Receptionist):
+        def _run_tool(self, *args):
+            time.sleep(0.2)
+            return super()._run_tool(*args)
+
+    receptionist = SlowTools(ScriptedModel(*PROPOSAL), now=lambda: NOW)
+    conversation = Conversation()
+    tool_started = asyncio.Event()
+
+    async def listen():
+        async for event in receptionist.respond(conversation, "Ana Paula, 11 98765-4321"):
+            if event["type"] == "tool_call":
+                tool_started.set()
+
+    turn = asyncio.create_task(listen())
+    await tool_started.wait()
+    await asyncio.sleep(0.05)
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    # The tool ran to the end and its result is in the history, matching what it did
+    assert conversation.messages[-1]["role"] == "tool"
+    assert conversation.pending
+    assert conversation.interrupt("") is False
+    assert conversation.messages[-1] == {"role": "assistant", "content": "…"}

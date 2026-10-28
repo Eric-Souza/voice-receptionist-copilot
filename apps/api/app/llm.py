@@ -4,6 +4,7 @@ Groq and OpenAI both speak the OpenAI chat-completions API, so one adapter cover
 """
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import lru_cache
@@ -36,19 +37,27 @@ class OpenAIChat:
         self.client = client
         self.models = [model, *(fallbacks or [])]
         self.reasoning_effort = reasoning_effort
+        # Rate-limited models are skipped until this time (monotonic), rather than asked again every call
+        self.cooling_until: dict[str, float] = {}
 
     async def stream(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> AsyncIterator[Chunk]:
         extra = {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
-        for n, model in enumerate(self.models):
+        now = time.monotonic()
+        models = [m for m in self.models if self.cooling_until.get(m, 0) <= now] or self.models[-1:]
+        for n, model in enumerate(models):
+            last = n == len(models) - 1
+            # Only the last model gets the SDK's retry: waiting out a 429 is slower than the next model
+            client = self.client if last else self.client.with_options(max_retries=0)
             try:
-                response = await self.client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model, messages=messages, tools=tools, stream=True, **extra
                 )
                 break
-            except RateLimitError:
-                if n == len(self.models) - 1:
+            except RateLimitError as exc:
+                self.cooling_until[model] = time.monotonic() + _retry_after(exc)
+                if last:
                     raise
-                log.warning("%s is rate limited, falling back to %s", model, self.models[n + 1])
+                log.warning("%s is rate limited, falling back to %s", model, models[n + 1])
         # Tool calls arrive in fragments keyed by index: id and name once, arguments piece by piece
         calls: dict[int, ToolCall] = {}
         async for chunk in response:
@@ -65,6 +74,14 @@ class OpenAIChat:
                     call.arguments += part.function.arguments or ""
         if calls:
             yield [calls[i] for i in sorted(calls)]
+
+
+def _retry_after(exc: RateLimitError) -> float:
+    """Seconds until the model takes requests again, per the 429's retry-after header (a minute if absent)."""
+    try:
+        return max(1.0, float(exc.response.headers.get("retry-after", 60)))
+    except ValueError:
+        return 60.0
 
 
 @lru_cache

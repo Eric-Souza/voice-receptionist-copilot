@@ -17,15 +17,17 @@
   #log { border-top: 1px solid #e5e7eb; padding-top: .5rem; }
   .you { margin-top: .8rem; font-weight: 600; } .sofia { margin-top: .3rem; }
   .tool, .timing { color: #6b7280; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
-  .error { color: #b91c1c; }
+  .error { color: #b91c1c; } .cut { color: #b45309; font-size: .85rem; }
 </style>
 </head>
 <body>
 <h1>Sofia, Clínica Sorriso Paulista</h1>
-<div>Voice test page. Use headphones, or speakers with echo cancellation, and wait for Sofia to finish before you talk.</div>
+<div>Voice test page. You can talk over Sofia to interrupt her. If she keeps interrupting herself (her voice leaking
+from the speakers into the mic), use headphones or turn interruptions off.</div>
 <div class="bar">
   <button id="call">Start call</button>
   <select id="language"><option value="pt">Português</option><option value="en">English</option></select>
+  <label><input type="checkbox" id="bargein" checked> Let me interrupt</label>
   <span id="status" class="status">idle</span>
 </div>
 <div id="log"></div>
@@ -34,6 +36,7 @@
 const MIC_RATE = 16000;
 const $ = (id) => document.getElementById(id);
 let ws, micCtx, micStream, playCtx, statusTimer, playEnd = 0, sofiaLine = null;
+let sources = [], userSpeaking = false, thinking = false;
 
 // Runs on the audio thread: downsample the mic to 16 kHz and post ~100 ms Int16 chunks
 const worklet = `
@@ -61,6 +64,17 @@ function line(cls, text) {
 }
 function setStatus(text, cls) { $("status").textContent = text; $("status").className = "status " + (cls || ""); }
 const playing = () => playCtx && playCtx.currentTime < playEnd + 0.3;
+function showStatus() {
+  if (!ws || ws.readyState !== 1) return;
+  if (userSpeaking) setStatus("you're talking", "speaking-you");
+  else if (playCtx.currentTime < playEnd) setStatus("Sofia is speaking", "sofia");
+  else if (thinking) setStatus("thinking...", "thinking");
+  else setStatus("listening", "listening");
+}
+function stopPlayback() {
+  sources.forEach((s) => { try { s.stop(); } catch {} });
+  sources = []; playEnd = 0;
+}
 
 function play(bytes, rate) {
   const pcm = new Int16Array(bytes);
@@ -71,23 +85,27 @@ function play(bytes, rate) {
   source.buffer = buffer; source.connect(playCtx.destination);
   const at = Math.max(playCtx.currentTime + 0.05, playEnd);
   source.start(at); playEnd = at + buffer.duration;
-  setStatus("Sofia is speaking", "sofia");
+  sources.push(source);
+  source.onended = () => { sources = sources.filter((s) => s !== source); };
 }
 
 function onEvent(e) {
   switch (e.type) {
-    case "ready": setStatus("listening", "listening"); break;
-    case "vad": if (e.speaking) setStatus("you're talking", "speaking-you"); else setStatus("thinking...", "thinking"); break;
+    case "vad": userSpeaking = e.speaking; break;
     case "transcript":
-      if (e.text) { line("you", "You: " + e.text + (e.language ? `  [${e.language}]` : "")); sofiaLine = line("sofia", "Sofia: "); }
-      else setStatus("listening", "listening");
+      if (e.text) { thinking = true; line("you", "You: " + e.text + (e.language ? `  [${e.language}]` : "")); sofiaLine = line("sofia", "Sofia: "); }
+      break;
+    case "interrupt":
+      stopPlayback(); thinking = false;
+      line("cut", "  (interrupted" + (e.heard ? `; you heard: "${e.heard}"` : " before you heard anything") + ")");
+      sofiaLine = null;
       break;
     case "reply": if (!sofiaLine) sofiaLine = line("sofia", "Sofia: "); sofiaLine.textContent += e.delta; break;
     case "tool_call": line("tool", `  -> ${e.name}(${JSON.stringify(e.arguments)})`); break;
     case "tool_result": line("tool", `  <- ${JSON.stringify(e.result).slice(0, 240)}`); break;
     case "audio": if (!sofiaLine) sofiaLine = line("sofia", "Sofia: " + e.text); break;
-    case "turn_done": line("timing", "  " + Object.entries(e.timings).map(([k, v]) => `${k} ${v}`).join(" · ")); sofiaLine = null; break;
-    case "error": line("error", "Error: " + e.message); break;
+    case "turn_done": thinking = false; line("timing", "  " + Object.entries(e.timings).map(([k, v]) => `${k} ${v}`).join(" · ")); sofiaLine = null; break;
+    case "error": thinking = false; line("error", "Error: " + e.message); break;
   }
 }
 
@@ -113,9 +131,9 @@ async function start() {
     }
   };
   ws.onclose = () => { stop(); };
-  // Half duplex: don't send the mic while Sofia is talking, so she doesn't hear herself
-  node.port.onmessage = (m) => { if (ws.readyState === 1 && !playing()) ws.send(m.data); };
-  statusTimer = setInterval(() => { if (ws && ws.readyState === 1 && !playing() && $("status").textContent === "Sofia is speaking") setStatus("listening", "listening"); }, 200);
+  // With interruptions off, the mic is muted while Sofia talks, so she can't hear herself
+  node.port.onmessage = (m) => { if (ws.readyState === 1 && ($("bargein").checked || !playing())) ws.send(m.data); };
+  statusTimer = setInterval(showStatus, 100);
   $("call").textContent = "End call"; $("call").className = "stop"; $("log").innerHTML = "";
   setStatus("connecting...", "");
 }
@@ -124,7 +142,7 @@ function stop() {
   if (ws && ws.readyState <= 1) ws.close();
   micStream?.getTracks().forEach((t) => t.stop());
   micCtx?.close(); playCtx?.close(); clearInterval(statusTimer);
-  ws = micCtx = playCtx = micStream = null; playEnd = 0;
+  ws = micCtx = playCtx = micStream = null; playEnd = 0; sources = []; userSpeaking = thinking = false;
   $("call").textContent = "Start call"; $("call").className = ""; setStatus("idle", "");
 }
 

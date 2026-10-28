@@ -41,11 +41,20 @@ _ABBREVIATIONS = {"dr", "dra", "sr", "sra", "srta", "prof", "profa", "etc", "a.m
 _BOUNDARY = re.compile(r"[.!?…]+[\"'”)\]]*(?=\s)")
 
 
-class SentenceSplitter:
-    """Collects streamed text and hands back each sentence once it's complete, so speech can start early."""
+_CLAUSE = re.compile(r"[,;:](?=\s)")
 
-    def __init__(self) -> None:
+
+class SentenceSplitter:
+    """Collects streamed text and hands back each sentence once it's complete, so speech can start early.
+
+    The caller is waiting for the first piece, and synthesis time grows with its length, so a long first
+    sentence is cut at its first comma once that comes at least `first_clause` characters in.
+    """
+
+    def __init__(self, first_clause: int = 25) -> None:
         self.buffer = ""
+        self.first_clause = first_clause
+        self.started = False
 
     def push(self, delta: str) -> list[str]:
         self.buffer += delta
@@ -59,6 +68,12 @@ class SentenceSplitter:
                 sentences.append(sentence)
             start = match.end()
         self.buffer = self.buffer[start:]
+        if not sentences and not self.started:
+            clause = _CLAUSE.search(self.buffer, self.first_clause)
+            if clause:
+                sentences.append(self.buffer[: clause.end()].strip())
+                self.buffer = self.buffer[clause.end() :]
+        self.started = self.started or bool(sentences)
         return sentences
 
     def flush(self) -> str | None:

@@ -9,6 +9,7 @@ import pytest
 
 _DB = Path(tempfile.mkdtemp()) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB.as_posix()}"
+os.environ["VOICE_TURN_LOG"] = str(_DB.parent / "voice-turns.jsonl")
 # Never call a real provider from the default test run
 os.environ["GROQ_API_KEY"] = os.environ.get("LIVE_GROQ_API_KEY", "")
 

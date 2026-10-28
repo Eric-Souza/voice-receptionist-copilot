@@ -46,3 +46,15 @@ def test_transcript_cleanup():
     noise = {"language": "pt", "segments": [{"text": "Legendas pela comunidade Amara.org", "no_speech_prob": 0.2}]}
     assert clean(noise).text == ""
     assert clean({"language": "japanese", "text": "はい"}).language is None
+
+
+def test_a_long_first_sentence_starts_at_its_first_clause():
+    splitter = SentenceSplitter()
+    out = []
+    for word in "Tem estacionamento com manobrista, R$ 25 por duas horas, e uma rua ao lado. Algo mais?".split(" "):
+        out += splitter.push(word + " ")
+    # Only the first piece is cut short; after that, whole sentences
+    assert out == ["Tem estacionamento com manobrista,", "R$ 25 por duas horas, e uma rua ao lado.", "Algo mais?"]
+    # A comma inside a number or too early on doesn't count
+    assert SentenceSplitter().push("Custa R$ 1.200,50 no total, ") == ["Custa R$ 1.200,50 no total,"]
+    assert SentenceSplitter().push("Sim, claro") == []
