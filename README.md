@@ -2,7 +2,7 @@
 
 A voice receptionist for a fictional dental clinic in São Paulo, Clínica Sorriso Paulista. Callers speak Portuguese or English. The agent, Sofia, answers questions about the clinic and books, reschedules or cancels appointments through tool calls.
 
-**Status:** milestone 3 of 6. The agent loop, tools, scheduling, SQLite, the HTTP API and a terminal chat came first, then voice: a WebSocket that takes mic audio and answers out loud, plus a bare browser page to try it. Now the caller can interrupt Sofia mid-sentence, and every turn's latency is logged. The real frontend comes next; see [PLAN.md](PLAN.md).
+**Status:** milestone 4 of 6. The agent loop, tools, scheduling, SQLite, the HTTP API and a terminal chat came first, then voice: a WebSocket that takes mic audio and answers out loud. Then barge-in, so the caller can interrupt Sofia mid-sentence, and per-turn latency logs. Now there's a React web app: you talk to Sofia and watch her transcript, tool calls, latency and the clinic's bookings calendar live. Bilingual polish and deployment come next; see [PLAN.md](PLAN.md).
 
 The whole stack runs on free tiers: Groq for the LLM and Whisper, with Silero VAD and Kokoro text-to-speech running locally on the CPU. Setting `LLM_PROVIDER=openai` switches to OpenAI's paid models.
 
@@ -64,6 +64,26 @@ A live run, from synthesized Portuguese speech streamed in at real-time pace. Th
 
 Each turn is also appended to `data/voice-turns.jsonl` with its timings, the tools it called, and whether it was interrupted.
 
+### Web app
+
+With the API running on port 8000, start the frontend (Node 20.19+):
+
+```bash
+cd apps/web
+npx npm@11 install   # npm 10.8 crashes on vitest 5's optional peers ("reading 'edgesOut'")
+npm run dev          # http://localhost:5173, proxies /api and /ws to :8000
+```
+
+The page has four panels:
+- **Transcript:** the caller's words with the language Whisper detected, and Sofia's reply as it streams. When you cut her off, the part you didn't hear is struck through.
+- **Tool calls:** each tool with its arguments and result, timed from the end of your speech, with a marker for when the first audio went out.
+- **Latency:** for each turn, a bar split into speech-to-text, time to first audio, and the rest of the reply. Medians on top.
+- **Bookings:** the week's appointments, one lane per dentist, with lunch and closed hours shaded. When Sofia confirms a booking, a move or a cancellation, the calendar jumps to that week, reloads and highlights the appointment.
+
+`npm test` runs the unit tests (vitest) for the reducer that turns the WebSocket events into the call state. `npm run build` typechecks and builds into `dist/`. For a deployed build, set `VITE_API_URL` to the API's origin.
+
+To run a call without a mic (in a headless browser, say), open `http://localhost:5173/?feed` in dev mode. Then queue recordings from the console with `await sofiaSay("/samples/pt-1.wav")`. They're streamed in at real-time pace, with silence in between. `public/samples/` is gitignored; make clips with any TTS (I used Kokoro with a different voice than Sofia's).
+
 ### HTTP API
 
 ```bash
@@ -75,7 +95,7 @@ Each turn is also appended to `data/voice-turns.jsonl` with its timings, the too
 | `POST /api/sessions` `{"language": "pt" \| "en"}` | Starts a conversation and returns `session_id` and the greeting |
 | `POST /api/sessions/{id}/messages` `{"text": "..."}` | One caller turn; returns the reply plus the tool calls and results |
 | `GET /api/appointments?start=YYYY-MM-DD&days=7` | Booked appointments, for the calendar view |
-| `GET /api/clinic` | Services, dentists and opening hours |
+| `GET /api/clinic` | Services, dentists, opening hours, slot length and the clinic's current time |
 | `GET /health` | Liveness check |
 | `WS /ws/voice?language=pt\|en` | A voice call; the protocol and barge-in are documented in `app/voice/call.py` |
 | `GET /voice` | The browser test page for it |
@@ -127,4 +147,9 @@ apps/api/app/
   static/voice.html     browser test page
   cli.py, seed.py       terminal chat, demo data
 apps/api/tests/         pytest, with a scripted fake model and fake STT and TTS
+apps/web/               React 19 + Vite + Tailwind
+  public/mic-worklet.js   downsamples the mic to 16 kHz on the audio thread
+  src/lib/voiceClient.ts  WebSocket, mic or feed input, sentence playback
+  src/lib/callState.ts    reducer from WebSocket events to the call state
+  src/components/         transcript, tool timeline, latency panel, calendar
 ```

@@ -26,7 +26,9 @@ def test_session_flow_and_calendar():
         # Startup seeded demo bookings for the next two weeks
         appointments = c.get("/api/appointments", params={"days": 14}).json()
         assert appointments and {"start", "end", "dentist_id"} <= set(appointments[0])
-        assert len(c.get("/api/clinic").json()["dentists"]) == 3
+        clinic = c.get("/api/clinic").json()
+        assert len(clinic["dentists"]) == 3
+        assert clinic["hours"]["0"] == [["08:00", "12:00"], ["13:00", "18:00"]] and clinic["hours"]["6"] == []
 
 
 def test_errors():

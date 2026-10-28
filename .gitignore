@@ -15,3 +15,6 @@ dist/
 data/*.db
 data/*.jsonl
 apps/api/models/
+
+# Caller recordings for testing the web app without a mic (made with Kokoro)
+apps/web/public/samples/

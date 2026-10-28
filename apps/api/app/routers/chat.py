@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from app.agent import Conversation, clinic_now
-from app.clinic import CLINIC_NAME, DENTISTS, SERVICES
+from app.clinic import CLINIC_NAME, DENTISTS, HOURS, SERVICES, SLOT_MINUTES
 from app.db import new_session
 from app.models import Appointment
 from app.prompts import GREETING
@@ -85,6 +85,11 @@ async def list_appointments(start: date | None = None, days: int = 7) -> list[di
 async def clinic() -> dict:
     return {
         "name": CLINIC_NAME,
+        # The clinic's own clock, so the calendar opens on the right day whatever the browser's time zone
+        "now": clinic_now().isoformat(timespec="minutes"),
+        "slot_minutes": SLOT_MINUTES,
+        # Monday = 0; each day is a list of [open, close] blocks, with lunch as the gap
+        "hours": {day: [[f"{a:%H:%M}", f"{b:%H:%M}"] for a, b in blocks] for day, blocks in HOURS.items()},
         "dentists": [{"id": d.id, "name": d.name, "services": list(d.services)} for d in DENTISTS.values()],
         "services": [
             {"key": s.key, "name_pt": s.name_pt, "name_en": s.name_en, "minutes": s.minutes, "price_brl": s.price_brl}
