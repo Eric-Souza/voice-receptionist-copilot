@@ -127,7 +127,7 @@ export function Calendar({ clinic, change }: { clinic: Clinic; change: CallState
                   return (
                     <div
                       key={a.id}
-                      title={`#${a.id} ${a.patient_name} · ${service?.name_en ?? a.service} · ${a.start.slice(11)}–${a.end.slice(11)} · ${clinic.dentists[lane]?.name}`}
+                      title={`#${a.id} ${a.patient_name} · ${service?.name ?? a.service} · ${clock(a.start)}–${clock(a.end)} · ${clinic.dentists[lane]?.name}`}
                       className={`absolute z-10 overflow-hidden rounded-sm border-l-4 px-1 text-[10px] leading-tight shadow-sm ${DENTIST_STYLES[lane % DENTIST_STYLES.length]} ${lit ? "z-30 animate-pulse ring-2 ring-rose-500 ring-offset-1" : ""}`}
                       style={{
                         top: y(minutes(a.start)) + 1,
@@ -137,7 +137,7 @@ export function Calendar({ clinic, change }: { clinic: Clinic; change: CallState
                       }}
                     >
                       <div className="truncate font-medium">{a.patient_name}</div>
-                      <div className="truncate opacity-75">{service?.name_en ?? a.service}</div>
+                      <div className="truncate opacity-75">{service?.name ?? a.service}</div>
                     </div>
                   );
                 })}
@@ -168,6 +168,11 @@ function Closed({ open, close, hours, y }: { open: number; close: number; hours:
   ));
 }
 
+function changeWhen(start: string): string {
+  const { weekday, date } = dayLabel(start.slice(0, 10));
+  return `${weekday} ${date}, ${clock(start)}`;
+}
+
 function ChangeNote({ change }: { change: NonNullable<CallState["change"]> }) {
   const styles = {
     booked: "bg-emerald-100 text-emerald-800",
@@ -177,7 +182,7 @@ function ChangeNote({ change }: { change: NonNullable<CallState["change"]> }) {
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[change.action]}`}>
       #{change.id} {change.action}
-      {change.start && change.action !== "cancelled" ? ` · ${change.start.replace("T", " ")}` : ""}
+      {change.start && change.action !== "cancelled" ? ` · ${changeWhen(change.start)}` : ""}
     </span>
   );
 }

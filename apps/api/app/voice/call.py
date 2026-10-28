@@ -1,20 +1,22 @@
 """One voice call: mic audio in, the receptionist's spoken reply out.
 
-The WebSocket protocol (/ws/voice?language=pt|en):
+The WebSocket protocol (/ws/voice):
 
   client -> server   binary: mic audio, 16 kHz 16-bit mono PCM, any chunk size, sent all the time
   server -> client   binary: speech, 24 kHz 16-bit mono PCM, one message per sentence, each right after
                      its {"type": "audio"} event
                      JSON events:
-    {"type": "ready", "language", "sample_rate"}
+    {"type": "ready", "sample_rate"}
     {"type": "vad", "speaking": true | false}       the caller started or stopped talking
-    {"type": "transcript", "text", "language"}      what Whisper heard ("" if it was just noise)
+    {"type": "transcript", "text"}                  what Whisper heard ("" if it was just noise)
     {"type": "reply", "delta"}                      the reply text as the model streams it
     {"type": "tool_call", ...}, {"type": "tool_result", ...}
     {"type": "audio", "text", "bytes", "kind"}      the next binary message is this sentence; kind is "reply",
                                                     "greeting", "apology" or "filler" (a "one moment" said
                                                     while a tool runs)
-    {"type": "interrupt", "heard"}                  the caller talked over Sofia: stop playback now
+    {"type": "interrupt", "heard", "transcribing"}  the caller talked over Sofia: stop playback now.
+                                                    transcribing: they cut in before their last words
+                                                    were transcribed, which come back merged with the rest
     {"type": "turn_done", "text", "timings"}        timings in ms, measured from the end of speech
     {"type": "error", "message"}
 
@@ -47,17 +49,9 @@ from app.voice.vad import WINDOW_MS, Segmenter, SpeechProb
 
 log = logging.getLogger(__name__)
 
-APOLOGY = {
-    "pt": "Desculpe, tive um probleminha aqui. Pode repetir, por favor?",
-    "en": "Sorry, I had a problem on my end. Could you say that again?",
-}
+APOLOGY = "Sorry, I had a problem on my end. Could you say that again?"
 # Said when the model goes to a tool before saying anything, so the caller isn't left in silence
-FILLERS = {
-    "pt": ["Só um instante.", "Um momento.", "Deixa eu ver."],
-    "en": ["One moment.", "Let me check.", "Just a second."],
-}
-# Whisper's language guess on "Sim" or "OK" is unreliable, so short utterances keep the current language
-MIN_WORDS_TO_SWITCH_LANGUAGE = 3
+FILLERS = ["One moment.", "Let me check.", "Just a second."]
 
 
 @dataclass
@@ -83,15 +77,13 @@ class VoiceCall:
         self,
         receptionist: Receptionist,
         services: VoiceServices,
-        language: str,
         send_json: Callable[[dict[str, Any]], Awaitable[None]],
         send_bytes: Callable[[bytes], Awaitable[None]],
     ):
         settings = get_settings()
-        self.language = language if language in GREETING else "pt"
         self.receptionist = receptionist
         self.services = services
-        self.conversation = Conversation([{"role": "assistant", "content": GREETING[self.language]}], self.language)
+        self.conversation = Conversation([{"role": "assistant", "content": GREETING}])
         self.segmenter = Segmenter(
             services.vad(), threshold=settings.vad_threshold, min_silence_ms=settings.vad_min_silence_ms
         )
@@ -124,8 +116,8 @@ class VoiceCall:
         return not self.reply_done or time.perf_counter() < self.playing_until
 
     async def start(self) -> None:
-        await self.emit({"type": "ready", "language": self.language, "sample_rate": self.services.tts.sample_rate})
-        self.turn = asyncio.create_task(self._speak(GREETING[self.language], "greeting"))
+        await self.emit({"type": "ready", "sample_rate": self.services.tts.sample_rate})
+        self.turn = asyncio.create_task(self._speak(GREETING, "greeting"))
 
     async def feed(self, data: bytes) -> None:
         for event in self.segmenter.feed(pcm16_to_float(data)):
@@ -160,12 +152,13 @@ class VoiceCall:
         heard = [s for s in self.sent if s.starts < self.speech_started]
         heard_all = self.reply_done and len(heard) == len(self.sent)
         heard_text = " ".join(s.text for s in heard if s.kind == "reply")
+        transcribing = not self.replying and self.utterance is not None and not self.reply_done
         self.playing_until = 0.0
-        await self.emit({"type": "interrupt", "heard": heard_text})
+        await self.emit({"type": "interrupt", "heard": heard_text, "transcribing": transcribing})
         if self.replying and not heard_all and self.conversation.interrupt(heard_text):
             self.carried = self.utterance
-        elif not self.replying and self.utterance is not None and not self.reply_done:
-            self.carried = self.utterance  # cut off while transcribing
+        elif transcribing:
+            self.carried = self.utterance
         if self._timings is not None and not self.reply_done:
             self._log_turn(self._timings, interrupted=True)
         self.reply_done = True
@@ -185,15 +178,13 @@ class VoiceCall:
         except Exception:
             log.exception("Transcription failed")
             await self.emit({"type": "error", "message": "Transcription failed"})
-            await self._speak(APOLOGY[self.language], "apology")
+            await self._speak(APOLOGY, "apology")
             self.reply_done = True
             return
         timings["stt_ms"] = _ms(self._heard_at)
-        if transcript.language and len(transcript.text.split()) >= MIN_WORDS_TO_SWITCH_LANGUAGE:
-            self.language = transcript.language
         if not transcript.text:
             self.reply_done = True
-        await self.emit({"type": "transcript", "text": transcript.text, "language": transcript.language})
+        await self.emit({"type": "transcript", "text": transcript.text})
         if not transcript.text:
             return
 
@@ -223,7 +214,7 @@ class VoiceCall:
             if rest := splitter.flush():
                 sentences.put_nowait((rest, "reply"))
             if failed or not reply:
-                sentences.put_nowait((APOLOGY[self.language], "apology"))
+                sentences.put_nowait((APOLOGY, "apology"))
             sentences.put_nowait(None)
             await speaker
         except asyncio.CancelledError:
@@ -238,9 +229,8 @@ class VoiceCall:
         await self.emit({"type": "turn_done", "text": reply, "timings": timings})
 
     def _filler(self) -> str:
-        options = FILLERS[self.language]
         self.fillers += 1
-        return options[(self.fillers - 1) % len(options)]
+        return FILLERS[(self.fillers - 1) % len(FILLERS)]
 
     async def _speak_queue(self, sentences: asyncio.Queue[tuple[str, str] | None]) -> None:
         while (item := await sentences.get()) is not None:
@@ -248,7 +238,7 @@ class VoiceCall:
 
     async def _speak(self, text: str, kind: str) -> None:
         try:
-            pcm = await self.services.tts.synthesize(speakable(text, self.language), self.language)
+            pcm = await self.services.tts.synthesize(speakable(text))
         except Exception:
             log.exception("Speech synthesis failed for %r", text)
             return
@@ -266,8 +256,7 @@ class VoiceCall:
     def _log_turn(self, timings: dict[str, Any], interrupted: bool) -> None:
         if not self.turn_log:
             return
-        record = {"at": datetime.now().isoformat(timespec="seconds"), "language": self.language}
-        record |= {"interrupted": interrupted, **timings}
+        record = {"at": datetime.now().isoformat(timespec="seconds"), "interrupted": interrupted, **timings}
         try:
             with self.turn_log.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")

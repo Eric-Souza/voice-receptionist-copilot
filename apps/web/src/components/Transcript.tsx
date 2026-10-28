@@ -23,9 +23,6 @@ export function Transcript({ turns, callerSpeaking }: { turns: Turn[]; callerSpe
               <div className="flex justify-end">
                 <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-teal-700 px-3.5 py-2 text-white">
                   {turn.caller.text}
-                  {turn.caller.language && (
-                    <span className="ml-2 rounded bg-teal-900/40 px-1 text-[10px] uppercase">{turn.caller.language}</span>
-                  )}
                 </div>
               </div>
             )}

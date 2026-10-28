@@ -7,7 +7,7 @@ class Appointment(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     patient_name: str
-    # Digits only, so "(11) 98765-4321" and "11987654321" match
+    # Digits only, so "(512) 555-0199" and "5125550199" match
     patient_phone: str = Field(index=True)
     dentist_id: str = Field(index=True)
     service: str

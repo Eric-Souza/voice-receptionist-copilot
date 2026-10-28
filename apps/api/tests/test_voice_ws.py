@@ -30,10 +30,10 @@ class FakeTTS:
         # How long each sentence plays for in the browser. No time by default: tests send mic audio much faster
         # than real time, and talking over audio that's still playing interrupts it
         self.seconds = seconds
-        self.said: list[tuple[str, str]] = []
+        self.said: list[str] = []
 
-    async def synthesize(self, text, language):
-        self.said.append((text, language))
+    async def synthesize(self, text):
+        self.said.append(text)
         return b"\x01\x00" * int(self.seconds * self.sample_rate)
 
 
@@ -61,12 +61,12 @@ def speak(ws, audio):
 def test_a_spoken_turn():
     model = ScriptedModel(
         [[("get_clinic_info", {"topic": "parking"})]],
-        ["Temos manobrista por R$ 25. ", "Posso ajudar em mais alguma coisa?"],
+        ["Parking in the garage is $5 an hour. ", "Can I help with anything else?"],
     )
-    stt, tts = FakeSTT(Transcript("Tem estacionamento aí?", "pt")), FakeTTS()
+    stt, tts = FakeSTT(Transcript("Is there parking?")), FakeTTS()
     services = VoiceServices(vad=lambda: loudness, stt=stt, tts=tts)
-    with TestClient(create_app(model, services)) as c, c.websocket_connect("/ws/voice?language=pt") as ws:
-        assert receive(ws) == {"type": "ready", "language": "pt", "sample_rate": 24_000}
+    with TestClient(create_app(model, services)) as c, c.websocket_connect("/ws/voice") as ws:
+        assert receive(ws) == {"type": "ready", "sample_rate": 24_000}
         greeting = receive(ws)
         assert greeting["type"] == "audio" and "Sofia" in greeting["text"]
         assert len(receive(ws)) == greeting["bytes"]
@@ -82,29 +82,30 @@ def test_a_spoken_turn():
         if kind == "audio":
             assert kinds[n + 1] == "<pcm>" and len(events[n + 1]) == events[n]["bytes"]
 
-    assert events[2] == {"type": "transcript", "text": "Tem estacionamento aí?", "language": "pt"}
+    assert events[2] == {"type": "transcript", "text": "Is there parking?"}
     # A filler while the tool runs, then the reply sentence by sentence, with the price spelled out for the TTS
     assert tts.said[1:] == [
-        ("Só um instante.", "pt"),
-        ("Temos manobrista por 25 reais.", "pt"),
-        ("Posso ajudar em mais alguma coisa?", "pt"),
+        "One moment.",
+        "Parking in the garage is 5 dollars an hour.",
+        "Can I help with anything else?",
     ]
     assert [e["kind"] for e in events if isinstance(e, dict) and e["type"] == "audio"] == ["filler", "reply", "reply"]
     done = events[-1]
-    assert done["text"] == "Temos manobrista por R$ 25. Posso ajudar em mais alguma coisa?"
+    assert done["text"] == "Parking in the garage is $5 an hour. Can I help with anything else?"
     assert {"stt_ms", "llm_first_text_ms", "first_audio_ms", "total_ms"} <= set(done["timings"])
     assert done["timings"]["tools"] == ["get_clinic_info"]
     assert 1.0 < len(stt.heard[0]) / 16_000 < 2.0
 
 
-def test_switches_language_and_skips_noise():
-    model = ScriptedModel(["Sure, we have valet parking for 25 reais."])
-    stt = FakeSTT(Transcript("", None), Transcript("Do you have parking there?", "en"))
+def test_skips_noise():
+    model = ScriptedModel(["Sure, there's free parking behind the building."])
+    stt = FakeSTT(Transcript(""), Transcript("Do you have parking there?"))
     tts = FakeTTS()
     services = VoiceServices(vad=lambda: loudness, stt=stt, tts=tts)
     with TestClient(create_app(model, services)) as c, c.websocket_connect("/ws/voice") as ws:
         until(ws, "audio")
         receive(ws)
+        ws.send_text("not json")  # stray text frames are ignored
         speak(ws, np.concatenate([silence(0.5), tone(0.5), silence(1)]))
         noise = until(ws, "transcript")
         assert noise[-1]["text"] == ""
@@ -112,7 +113,7 @@ def test_switches_language_and_skips_noise():
         speak(ws, np.concatenate([tone(1), silence(1)]))
         until(ws, "turn_done")
     assert len(model.calls) == 1
-    assert tts.said[-1] == ("Sure, we have valet parking for 25 reais.", "en")
+    assert tts.said[-1] == "Sure, there's free parking behind the building."
 
 
 def windows(n: int, loud: bool) -> np.ndarray:
@@ -140,10 +141,10 @@ def connect(model, stt, tts):
 
 def test_talking_over_sofia_stops_her():
     model = ScriptedModel(
-        ["Temos três horários na quinta. ", "Às 8h, às 9h ou às 10h."],
-        ["Claro, às 9h então."],
+        ["We have three times on Thursday. ", "At 8, 9 or 10 am."],
+        ["Sure, 9 am it is."],
     )
-    stt = FakeSTT(Transcript("Quero marcar uma limpeza na quinta.", "pt"), Transcript("Pode ser às 9h?", "pt"))
+    stt = FakeSTT(Transcript("I'd like a cleaning on Thursday."), Transcript("Can I do 9 am?"))
     tts = FakeTTS()
     with connect(model, stt, tts) as c, c.websocket_connect("/ws/voice") as ws:
         until(ws, "audio")
@@ -154,17 +155,17 @@ def test_talking_over_sofia_stops_her():
 
         # The first sentence is playing and the second is queued behind it when the caller talks over her
         speak(ws, np.concatenate([windows(30, True), windows(25, False)]))
-        assert until(ws, "interrupt")[-1]["heard"] == "Temos três horários na quinta."
+        assert until(ws, "interrupt")[-1]["heard"] == "We have three times on Thursday."
         until(ws, "turn_done")
 
     # The model saw only what the caller heard, marked as cut off
-    assert model.calls[1][-2] == {"role": "assistant", "content": "Temos três horários na quinta.…"}
-    assert model.calls[1][-1] == {"role": "user", "content": "Pode ser às 9h?"}
+    assert model.calls[1][-2] == {"role": "assistant", "content": "We have three times on Thursday.…"}
+    assert model.calls[1][-1] == {"role": "user", "content": "Can I do 9 am?"}
 
 
 def test_short_sounds_dont_interrupt():
-    model = ScriptedModel(["Temos três horários na quinta."])
-    stt = FakeSTT(Transcript("Quero marcar uma limpeza.", "pt"))
+    model = ScriptedModel(["We have three times on Thursday."])
+    stt = FakeSTT(Transcript("I'd like a cleaning."))
     tts = FakeTTS()
     with connect(model, stt, tts) as c, c.websocket_connect("/ws/voice") as ws:
         until(ws, "audio")
@@ -172,7 +173,7 @@ def test_short_sounds_dont_interrupt():
         tts.seconds = 5
         speak(ws, QUESTION)
         until(ws, "turn_done")
-        # An "uhum" (8 windows, a quarter second) while Sofia talks: long enough to be speech, too short to interrupt
+        # An "uh-huh" (8 windows, a quarter second) while Sofia talks: long enough to be speech, too short to interrupt
         speak(ws, np.concatenate([windows(8, True), windows(25, False)]))
         events = until(ws, "vad") + until(ws, "vad")
     assert [e["speaking"] for e in events] == [True, False]
@@ -180,8 +181,8 @@ def test_short_sounds_dont_interrupt():
 
 
 def test_talking_while_sofia_thinks_resends_both_parts():
-    model = StuckModel(["Claro, quinta às 8h com a Dra. Ana."])
-    stt = FakeSTT(Transcript("Quero marcar uma limpeza", "pt"), Transcript("Quero marcar uma limpeza na quinta.", "pt"))
+    model = StuckModel(["Sure, Thursday at 8 am with Dr. Reed."])
+    stt = FakeSTT(Transcript("I'd like a cleaning"), Transcript("I'd like a cleaning on Thursday."))
     with connect(model, stt, FakeTTS()) as c, c.websocket_connect("/ws/voice") as ws:
         until(ws, "audio")
         receive(ws)
@@ -189,10 +190,34 @@ def test_talking_while_sofia_thinks_resends_both_parts():
         until(ws, "transcript")
         # The pause was long enough to end the turn, but the caller goes on while the model is still thinking
         speak(ws, np.concatenate([windows(20, True), windows(25, False)]))
-        assert until(ws, "interrupt")[-1]["heard"] == ""
+        assert until(ws, "interrupt")[-1] == {"type": "interrupt", "heard": "", "transcribing": False}
         until(ws, "turn_done")
 
     # Whisper got both parts together the second time, and the model saw a single caller message
     assert len(stt.heard[1]) > len(stt.heard[0]) + 40 * WINDOW
     assert [m["role"] for m in model.calls[1][1:]] == ["assistant", "user"]
-    assert model.calls[1][-1]["content"] == "Quero marcar uma limpeza na quinta."
+    assert model.calls[1][-1]["content"] == "I'd like a cleaning on Thursday."
+
+
+def test_talking_while_whisper_works_resends_both_parts():
+    class StuckSTT(FakeSTT):
+        """Hangs on the first utterance, so the caller goes on talking before it's transcribed."""
+
+        async def transcribe(self, audio):
+            if not self.heard:
+                self.heard.append(audio)
+                await asyncio.Event().wait()
+            return await super().transcribe(audio)
+
+    model = ScriptedModel(["Sure, which day?"])
+    stt = StuckSTT(Transcript("I'd like a cleaning, please."))
+    with connect(model, stt, FakeTTS()) as c, c.websocket_connect("/ws/voice") as ws:
+        until(ws, "audio")
+        receive(ws)
+        speak(ws, QUESTION)
+        speak(ws, np.concatenate([windows(20, True), windows(25, False)]))
+        # The browser has no exchange for this yet, so it mustn't mark the previous one as cut off
+        assert until(ws, "interrupt")[-1] == {"type": "interrupt", "heard": "", "transcribing": True}
+        assert until(ws, "transcript")[-1]["text"] == "I'd like a cleaning, please."
+        until(ws, "turn_done")
+    assert len(stt.heard[1]) > len(stt.heard[0]) + 40 * WINDOW

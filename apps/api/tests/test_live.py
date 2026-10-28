@@ -29,10 +29,10 @@ def booked(events):
 
 
 async def test_books_only_after_the_caller_confirms():
-    receptionist, conversation = Receptionist(get_chat_model(), now=lambda: NOW), Conversation(language="en")
+    receptionist, conversation = Receptionist(get_chat_model(), now=lambda: NOW), Conversation()
     events = await say(receptionist, conversation, "Hi, I'd like a cleaning tomorrow morning.")
     assert "check_availability" in tool_names(events)
-    events = await say(receptionist, conversation, "The first one, please. Maria Souza, 11 98888-7777.")
+    events = await say(receptionist, conversation, "The first one, please. Maria Lopez, 512 555 0177.")
     assert not booked(events)
     events = await say(receptionist, conversation, "Yes, that's right.")
     assert booked(events)

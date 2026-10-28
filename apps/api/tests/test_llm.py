@@ -51,10 +51,10 @@ async def test_falls_back_to_the_next_model_when_rate_limited():
         asked.append(model)
         if model == "main":
             return httpx.Response(429, json={"error": {"message": "tokens per day", "type": "tokens"}})
-        return httpx.Response(200, text=sse({"content": "Oi!"}))
+        return httpx.Response(200, text=sse({"content": "Hi!"}))
 
     chunks = await collect(OpenAIChat(client_for(handler), "main", fallbacks=["backup"]))
-    assert chunks == ["Oi!"] and asked == ["main", "backup"]
+    assert chunks == ["Hi!"] and asked == ["main", "backup"]
 
 
 async def test_a_rate_limited_model_is_skipped_until_its_retry_after():
@@ -65,7 +65,7 @@ async def test_a_rate_limited_model_is_skipped_until_its_retry_after():
         asked.append(model)
         if model == "main":
             return httpx.Response(429, headers={"retry-after": "120"}, json={"error": {"message": "tokens per day"}})
-        return httpx.Response(200, text=sse({"content": "Oi!"}))
+        return httpx.Response(200, text=sse({"content": "Hi!"}))
 
     model = OpenAIChat(client_for(handler), "main", fallbacks=["backup"])
     await collect(model)

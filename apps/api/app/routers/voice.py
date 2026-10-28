@@ -1,7 +1,6 @@
 """The voice WebSocket (protocol in app/voice/call.py) and a bare test page for it."""
 
 import asyncio
-import json
 import logging
 from pathlib import Path
 
@@ -25,7 +24,7 @@ async def _services(ws: WebSocket) -> VoiceServices:
 
 
 @router.websocket("/ws/voice")
-async def voice(ws: WebSocket, language: str = "pt") -> None:
+async def voice(ws: WebSocket) -> None:
     await ws.accept()
     try:
         services = await _services(ws)
@@ -33,7 +32,7 @@ async def voice(ws: WebSocket, language: str = "pt") -> None:
         await ws.send_json({"type": "error", "message": str(exc)})
         await ws.close(code=1011)
         return
-    call = VoiceCall(ws.app.state.receptionist, services, language, ws.send_json, ws.send_bytes)
+    call = VoiceCall(ws.app.state.receptionist, services, ws.send_json, ws.send_bytes)
     await call.start()
     try:
         while True:
@@ -43,7 +42,7 @@ async def voice(ws: WebSocket, language: str = "pt") -> None:
             if message.get("bytes"):
                 await call.feed(message["bytes"])
             elif message.get("text"):
-                log.debug("Ignoring client message %s", json.loads(message["text"]).get("type"))
+                log.debug("Ignoring client message %.200s", message["text"])
     except WebSocketDisconnect:
         pass
     finally:

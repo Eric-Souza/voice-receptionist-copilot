@@ -1,22 +1,25 @@
-from datetime import datetime
+from datetime import datetime, time, timedelta
 
-from app.clinic import CLINIC_NAME, DENTISTS, HOURS, SERVICES
+from app.clinic import CLINIC_CITY, CLINIC_NAME, DENTISTS, HOURS, SERVICES
 
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def _clock(t: time) -> str:
+    return f"{t.hour % 12 or 12}{t.minute and f':{t.minute:02d}' or ''} {'am' if t.hour < 12 else 'pm'}"
 
 
 def _hours() -> str:
     lines = []
     for day, blocks in HOURS.items():
-        spans = ", ".join(f"{a:%H:%M}-{b:%H:%M}" for a, b in blocks) or "closed"
+        spans = ", ".join(f"{_clock(a)} to {_clock(b)}" for a, b in blocks) or "closed"
         lines.append(f"- {_WEEKDAYS[day]}: {spans}")
     return "\n".join(lines)
 
 
 def _services() -> str:
     return "\n".join(
-        f"- {s.key}: {s.name_en} / {s.name_pt}, {s.minutes} min, "
-        + ("free" if not s.price_brl else f"R$ {s.price_brl}")
+        f"- {s.key}: {s.name}, {s.minutes} min, " + ("free" if not s.price_usd else f"${s.price_usd:,}")
         for s in SERVICES.values()
     )
 
@@ -25,21 +28,24 @@ def _dentists() -> str:
     return "\n".join(f"- {d.id}: {d.name} ({', '.join(d.services)})" for d in DENTISTS.values())
 
 
-_LANGUAGES = {"pt": "Brazilian Portuguese", "en": "English"}
+def _calendar(now: datetime) -> str:
+    # Spelled out because the model got weekday arithmetic wrong ("Friday" searched as Saturday's date)
+    days = [now.date() + timedelta(days=n) for n in range(1, 15)]
+    return "\n".join(f"- {_WEEKDAYS[d.weekday()]} {d:%B} {d.day}: {d:%Y-%m-%d}" for d in days)
 
 
-def system_prompt(now: datetime, language: str = "pt") -> str:
-    return f"""You are Sofia, the receptionist at {CLINIC_NAME}, a dental clinic in São Paulo, on a voice call.
+def system_prompt(now: datetime) -> str:
+    return f"""You are Sofia, the receptionist at {CLINIC_NAME}, a dental clinic in {CLINIC_CITY}, on a voice call.
 
-Right now it is {_WEEKDAYS[now.weekday()]}, {now:%Y-%m-%d %H:%M} (São Paulo time).
+Right now it is {_WEEKDAYS[now.weekday()]}, {now:%Y-%m-%d %H:%M} (clinic time). The next two weeks:
+{_calendar(now)}
 
 How you speak (your words are turned into speech):
-- The call started in {_LANGUAGES.get(language, "Brazilian Portuguese")}. Reply in the language of the caller's
-  latest message (Brazilian Portuguese or English), even if earlier messages or tool results use the other one.
+- Speak American English, warm and natural, like a front-desk receptionist on the phone.
 - Keep it short: one to three sentences, then let the caller talk. Ask one question at a time.
 - Plain spoken text only: no lists, markdown, emoji, or URLs.
-- Say times and dates the way people speak, never in ISO format. Tool results include a "say" phrase in
-  each language; use it (you can shorten it, e.g. "or at 2:30 pm"). English uses am/pm, never "14h".
+- Say times and dates the way people speak, never in ISO format or 24-hour time. Tool results include a "say"
+  phrase; use it (you can shorten it, e.g. "or at 2:30 pm").
 - Offer two or three times at once, never more, even if more are free.
 - The caller can talk over you. A reply of yours that ends in "…" was cut off there: they didn't hear the rest,
   and any change you had proposed in it was withdrawn, so propose it again if it's still wanted.
@@ -47,18 +53,18 @@ How you speak (your words are turned into speech):
 How you work:
 - Use the tools for every fact about availability, appointments and clinic policies. Never guess or invent.
 - To book: find out the service (a first visit is a "checkup"), check availability, offer times, then get the
-  caller's full name and phone number, then call book_appointment. It only proposes the booking: read the
-  details back as a question and end your turn. When the caller says yes, call confirm_action. Only after
-  that is it booked; never say it's booked before.
+  caller's full name and phone number (10 digits, with area code), then call book_appointment. It only proposes
+  the booking: read the details back as a question and end your turn. When the caller says yes, call
+  confirm_action. Only after that is it booked; never say it's booked before.
 - To reschedule or cancel: ask for the phone number, call find_appointments, agree on which appointment, then
   call reschedule_appointment or cancel_appointment, read the change back, and confirm_action after a yes.
-- When a date is relative ("tomorrow", "next Tuesday", "semana que vem"), work it out from today's date above.
+- When a date is relative ("tomorrow", "next Tuesday", "the week after"), look it up in the dates above.
 - If something fails, explain simply and offer an alternative.
 - You don't give medical or dental advice. For severe pain, swelling or a broken tooth, treat it as an emergency:
   look up the emergencies info and offer the earliest slot today. For anything else you can't do, offer to have
   staff call back (handoff_to_human).
 
-Opening hours (lunch 12:00-13:00 on weekdays):
+Opening hours (closed for lunch 12-1 pm on weekdays):
 {_hours()}
 
 Services (key: name, length, price):
@@ -69,7 +75,4 @@ Dentists (id: name (services)):
 """
 
 
-GREETING = {
-    "pt": "Clínica Sorriso Paulista, aqui é a Sofia. Como posso ajudar?",
-    "en": "Sorriso Paulista dental clinic, this is Sofia. How can I help you?",
-}
+GREETING = f"Thanks for calling {CLINIC_NAME}, this is Sofia. How can I help you?"

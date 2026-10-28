@@ -66,7 +66,7 @@ def test_reset_forgets_half_heard_speech():
 
 
 MODELS = get_settings().models_dir
-SAMPLE = MODELS / "samples" / "pt-br.wav"
+SAMPLE = MODELS / "samples" / "en-us.wav"
 
 
 @pytest.mark.skipif(not (MODELS / "silero_vad.onnx").exists() or not SAMPLE.exists(), reason="voice models missing")

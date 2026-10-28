@@ -6,7 +6,7 @@ import { ToolTimeline } from "./components/ToolTimeline";
 import { Transcript } from "./components/Transcript";
 import { fetchClinic } from "./lib/api";
 import { callReducer, initialCall } from "./lib/callState";
-import type { Clinic, Language } from "./lib/types";
+import type { Clinic } from "./lib/types";
 import { VoiceClient } from "./lib/voiceClient";
 
 // Development only: ?feed takes the caller's audio from recordings instead of the mic, so a headless browser can
@@ -23,7 +23,6 @@ export default function App() {
   const [call, dispatch] = useReducer(callReducer, initialCall);
   const [clinic, setClinic] = useState<Clinic>();
   const [clinicError, setClinicError] = useState<string>();
-  const [language, setLanguage] = useState<Language>("pt");
   const [allowInterrupt, setAllowInterrupt] = useState(true);
   const [level, setLevel] = useState(0);
   const [sofiaSpeaking, setSofiaSpeaking] = useState(false);
@@ -32,9 +31,19 @@ export default function App() {
   interruptRef.current = allowInterrupt;
 
   useEffect(() => {
-    fetchClinic()
-      .then(setClinic)
-      .catch((err: Error) => setClinicError(err.message));
+    let loaded = false;
+    const load = () =>
+      fetchClinic()
+        .then((c) => {
+          loaded = true;
+          setClinic(c);
+        })
+        // A refresh that fails keeps the clinic shown; only the first load reports it
+        .catch((err: Error) => loaded || setClinicError(err.message));
+    void load();
+    // The clinic's clock moves the calendar's now-line and "today", so it's refreshed every minute
+    const timer = setInterval(load, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   const inCall = call.status === "connecting" || call.status === "live";
@@ -52,9 +61,8 @@ export default function App() {
   const stop = useCallback(() => client.current?.stop(), []);
 
   const start = useCallback(async () => {
-    dispatch({ type: "connect", language });
+    dispatch({ type: "connect" });
     const voice = new VoiceClient({
-      language,
       feed: FEED,
       allowInterrupt: () => interruptRef.current,
       onEvent: (event, at) => dispatch({ type: "event", event, at }),
@@ -74,7 +82,7 @@ export default function App() {
       const message = err instanceof DOMException && err.name === "NotAllowedError" ? "Microphone access was blocked" : String(err);
       voice.stop(message);
     }
-  }, [language]);
+  }, []);
 
   useEffect(() => () => client.current?.stop(), []);
 
@@ -92,18 +100,16 @@ export default function App() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">
-            Sofia <span className="font-normal text-slate-500">· {clinic?.name ?? "Clínica Sorriso Paulista"}</span>
+            Sofia <span className="font-normal text-slate-500">· {clinic?.name ?? "Brightside Dental"}</span>
           </h1>
           <p className="text-sm text-slate-500">
-            A voice receptionist for a São Paulo dental clinic. Talk to her in Portuguese or English, and watch the
+            A voice receptionist for a dental clinic in {clinic?.city ?? "Austin, Texas"}. Talk to her, and watch the
             tools, timings and bookings as she works.
           </p>
         </div>
         <CallControls
           inCall={inCall}
           activity={activity}
-          language={language}
-          onLanguage={setLanguage}
           allowInterrupt={allowInterrupt}
           onAllowInterrupt={setAllowInterrupt}
           level={level}

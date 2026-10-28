@@ -11,14 +11,14 @@ def client(model):
 def test_session_flow_and_calendar():
     model = ScriptedModel(
         [[("get_clinic_info", {"topic": "parking"})]],
-        ["There's valet parking for 25 reais."],
+        ["Parking in the garage is $5 an hour."],
     )
     with client(model) as c:
-        session = c.post("/api/sessions", json={"language": "en"}).json()
+        session = c.post("/api/sessions").json()
         assert "Sofia" in session["greeting"]
 
         reply = c.post(f"/api/sessions/{session['session_id']}/messages", json={"text": "Is there parking?"}).json()
-        assert reply["reply"] == "There's valet parking for 25 reais."
+        assert reply["reply"] == "Parking in the garage is $5 an hour."
         assert [e["type"] for e in reply["events"]] == ["tool_call", "tool_result", "done"]
         # The model saw the greeting as its own earlier turn
         assert model.calls[0][1] == {"role": "assistant", "content": session["greeting"]}

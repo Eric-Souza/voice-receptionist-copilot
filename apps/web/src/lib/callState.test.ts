@@ -7,12 +7,12 @@ function play(events: [number, ServerEvent][], state: CallState = initialCall): 
 }
 
 const GREETED: [number, ServerEvent][] = [
-  [0, { type: "ready", language: "pt", sample_rate: 24000 }],
-  [10, { type: "audio", text: "Clínica Sorriso Paulista, aqui é a Sofia.", bytes: 100, kind: "greeting" }],
+  [0, { type: "ready", sample_rate: 24000 }],
+  [10, { type: "audio", text: "Thanks for calling Brightside Dental, this is Sofia.", bytes: 100, kind: "greeting" }],
 ];
 
 const CONFIRMED = {
-  booked: { appointment_id: 7, patient_name: "Ana Paula", start: "2026-10-29T08:00", dentist: "Dra. Ana Ribeiro" },
+  booked: { appointment_id: 7, patient_name: "Jane Doe", start: "2026-10-29T08:00", dentist: "Dr. Anna Reed" },
 };
 
 describe("callReducer", () => {
@@ -21,21 +21,21 @@ describe("callReducer", () => {
       ...GREETED,
       [1000, { type: "vad", speaking: true }],
       [2000, { type: "vad", speaking: false }],
-      [2400, { type: "transcript", text: "Pode ser, confirma.", language: "pt" }],
+      [2400, { type: "transcript", text: "Yes, go ahead." }],
       [2900, { type: "tool_call", id: "c1", name: "confirm_action", arguments: { action_id: "A1" } }],
-      [2950, { type: "audio", text: "Só um instante.", bytes: 10, kind: "filler" }],
+      [2950, { type: "audio", text: "One moment.", bytes: 10, kind: "filler" }],
       [2960, { type: "tool_result", id: "c1", name: "confirm_action", result: CONFIRMED }],
-      [3500, { type: "reply", delta: "Pronto, " }],
-      [3550, { type: "reply", delta: "está marcado." }],
-      [4200, { type: "turn_done", text: "Pronto, está marcado.", timings: { stt_ms: 400, total_ms: 2200 } }],
+      [3500, { type: "reply", delta: "Done, " }],
+      [3550, { type: "reply", delta: "you're booked." }],
+      [4200, { type: "turn_done", text: "Done, you're booked.", timings: { stt_ms: 400, total_ms: 2200 } }],
     ]);
 
     expect(state.status).toBe("live");
     expect(state.turns.map((t) => t.kind)).toEqual(["greeting", "exchange"]);
     const turn = state.turns[1];
-    expect(turn.caller).toEqual({ text: "Pode ser, confirma.", language: "pt" });
-    expect(turn.sofia).toBe("Pronto, está marcado.");
-    expect(turn.filler).toBe("Só um instante.");
+    expect(turn.caller).toEqual({ text: "Yes, go ahead." });
+    expect(turn.sofia).toBe("Done, you're booked.");
+    expect(turn.filler).toBe("One moment.");
     expect(turn.status).toBe("done");
     expect(turn.timings?.stt_ms).toBe(400);
     // Tool times are relative to the end of the caller's speech
@@ -48,8 +48,8 @@ describe("callReducer", () => {
   it("ignores noise and only flags changes from confirm_action", () => {
     const state = play([
       ...GREETED,
-      [100, { type: "transcript", text: "", language: null }],
-      [200, { type: "transcript", text: "Quais horários?", language: "pt" }],
+      [100, { type: "transcript", text: "" }],
+      [200, { type: "transcript", text: "What times do you have?" }],
       [300, { type: "tool_call", id: "c1", name: "find_appointments", arguments: {} }],
       [400, { type: "tool_result", id: "c1", name: "find_appointments", result: { appointments: [] } }],
     ]);
@@ -60,40 +60,56 @@ describe("callReducer", () => {
   it("keeps what was heard when the caller cuts in", () => {
     const state = play([
       ...GREETED,
-      [100, { type: "transcript", text: "Quinta?", language: "pt" }],
-      [200, { type: "reply", delta: "Temos três horários na quinta. Às 8h, às 9h" }],
-      [900, { type: "interrupt", heard: "Temos três horários na quinta." }],
+      [100, { type: "transcript", text: "Thursday?" }],
+      [200, { type: "reply", delta: "We have three times on Thursday. At 8, 9" }],
+      [900, { type: "interrupt", heard: "We have three times on Thursday." }],
     ]);
-    expect(state.turns[1]).toMatchObject({ status: "interrupted", heard: "Temos três horários na quinta." });
+    expect(state.turns[1]).toMatchObject({ status: "interrupted", heard: "We have three times on Thursday." });
 
     // A late event from the cancelled turn doesn't touch it
-    const later = play([[950, { type: "reply", delta: " ou às 10h." }]], state);
-    expect(later.turns[1].sofia).toBe("Temos três horários na quinta. Às 8h, às 9h");
+    const later = play([[950, { type: "reply", delta: " or 10 am." }]], state);
+    expect(later.turns[1].sofia).toBe("We have three times on Thursday. At 8, 9");
   });
 
   it("drops an exchange cut off before Sofia said anything, since it comes back merged", () => {
     const state = play([
       ...GREETED,
-      [100, { type: "transcript", text: "Quero marcar uma limpeza", language: "pt" }],
+      [100, { type: "transcript", text: "I'd like a cleaning" }],
       [300, { type: "interrupt", heard: "" }],
-      [2000, { type: "transcript", text: "Quero marcar uma limpeza na quinta.", language: "pt" }],
+      [2000, { type: "transcript", text: "I'd like a cleaning on Thursday." }],
     ]);
-    expect(state.turns.map((t) => t.caller?.text)).toEqual([undefined, "Quero marcar uma limpeza na quinta."]);
+    expect(state.turns.map((t) => t.caller?.text)).toEqual([undefined, "I'd like a cleaning on Thursday."]);
+  });
+
+  it("leaves a finished reply alone when the caller cuts in before being transcribed", () => {
+    const state = play([
+      ...GREETED,
+      [100, { type: "transcript", text: "Do you have parking?" }],
+      [200, { type: "turn_done", text: "Yes, behind the building.", timings: {} }],
+      [900, { type: "interrupt", heard: "", transcribing: true }],
+    ]);
+    expect(state.turns[1]).toMatchObject({ status: "done", sofia: "Yes, behind the building." });
+  });
+
+  it("keeps the server's error over the close code that follows it", () => {
+    let state = play([[0, { type: "error", message: "The voice models aren't downloaded" }]]);
+    state = callReducer(state, { type: "closed", error: "Connection closed (1011)" });
+    expect(state.error).toBe("The voice models aren't downloaded");
   });
 
   it("marks a failed turn and ends the call cleanly", () => {
     let state = play([
       ...GREETED,
-      [100, { type: "transcript", text: "Oi", language: "pt" }],
+      [100, { type: "transcript", text: "Hi" }],
       [200, { type: "error", message: "The language model call failed" }],
-      [300, { type: "audio", text: "Desculpe, tive um probleminha aqui.", bytes: 10, kind: "apology" }],
+      [300, { type: "audio", text: "Sorry, I had a problem on my end. Could you say that again?", bytes: 10, kind: "apology" }],
       [400, { type: "turn_done", text: "", timings: {} }],
     ]);
-    expect(state.turns[1]).toMatchObject({ status: "failed", sofia: "Desculpe, tive um probleminha aqui." });
+    expect(state.turns[1]).toMatchObject({ status: "failed", sofia: "Sorry, I had a problem on my end. Could you say that again?" });
 
     state = callReducer(state, { type: "closed" });
     expect(state.status).toBe("ended");
-    expect(callReducer(state, { type: "connect", language: "en" })).toMatchObject({ turns: [], language: "en" });
+    expect(callReducer(state, { type: "connect" })).toMatchObject({ turns: [] });
   });
 });
 

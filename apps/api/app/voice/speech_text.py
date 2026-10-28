@@ -1,43 +1,35 @@
 """Turning the model's text into what the TTS should say, and cutting it into sentences as it streams.
 
-Kokoro reads "R$ 180" as "real dollar 180", "8h30" as "oito H30" and, in English, "Dra." as "draw".
-Spelled-out forms come out right, so replies are rewritten before synthesis.
+Symbols and abbreviations ("$1,200.50", "Dr.") are spelled out before synthesis, so Kokoro doesn't have to
+guess how to read them.
 """
 
 import re
 
-_TITLES = {
-    "pt": {"Dra.": "Doutora", "Dr.": "Doutor", "Sra.": "Senhora", "Sr.": "Senhor"},
-    "en": {"Dra.": "Doctor", "Dr.": "Doctor", "Sra.": "Mrs.", "Sr.": "Mr."},
-}
-_MONEY = re.compile(r"R\$\s?(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?")
-_PT_CLOCK = re.compile(r"\b(\d{1,2})h(\d{2})\b")
+_TITLES = {"Dr.": "Doctor"}
+_MONEY = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d)")
+# Models write "8\u202fam" with a narrow no-break space; Kokoro's phonemizer only knows plain spaces
+_SPACES = re.compile("[\u00a0\u2007\u2009\u202f]")
 _MARKUP = re.compile(r"[*_#`~>|]+")
 
 
 def _money(match: re.Match) -> str:
-    reais = match.group(1).replace(".", "")
-    cents = match.group(2)
-    return f"{reais} reais" + (f" e {int(cents)} centavos" if cents and int(cents) else "")
+    dollars = int(match.group(1).replace(",", ""))
+    cents = int((match.group(2) or "0").ljust(2, "0"))
+    spoken = f"{dollars} dollar{'' if dollars == 1 else 's'}"
+    return spoken + (f" and {cents} cent{'' if cents == 1 else 's'}" if cents else "")
 
 
-def _pt_clock(match: re.Match) -> str:
-    hour, minute = match.group(1), int(match.group(2))
-    return f"{hour} e meia" if minute == 30 else f"{hour} e {minute}"
-
-
-def speakable(text: str, language: str) -> str:
-    text = _MARKUP.sub("", text)
-    for title, spoken in _TITLES["en" if language == "en" else "pt"].items():
+def speakable(text: str) -> str:
+    text = _SPACES.sub(" ", _MARKUP.sub("", text))
+    for title, spoken in _TITLES.items():
         text = re.sub(rf"\b{re.escape(title)}", spoken, text)
     text = _MONEY.sub(_money, text)
-    if language != "en":
-        text = _PT_CLOCK.sub(_pt_clock, text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 # A period after these doesn't end a sentence
-_ABBREVIATIONS = {"dr", "dra", "sr", "sra", "srta", "prof", "profa", "etc", "a.m", "p.m", "av", "n"}
+_ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "st", "ave", "prof", "etc", "a.m", "p.m", "vs"}
 _BOUNDARY = re.compile(r"[.!?…]+[\"'”)\]]*(?=\s)")
 
 

@@ -45,7 +45,6 @@ def clinic_now() -> datetime:
 class Conversation:
     # Chat history without the system prompt, which is rebuilt every turn with the current time
     messages: list[dict[str, Any]] = field(default_factory=list)
-    language: str = "pt"  # the language the call started in; the caller may switch
     turns: int = 0  # caller messages so far
     pending: dict[str, Pending] = field(default_factory=dict)  # changes waiting for the caller's yes
     turn_start: int = 0  # where the latest caller turn begins in messages
@@ -60,21 +59,16 @@ class Conversation:
         turn = self.messages[self.turn_start :]
         if not turn:
             return False
-        # A tool call batch without all its results would break the next request
-        answered = {m["tool_call_id"] for m in turn if m["role"] == "tool"}
-        for n, message in enumerate(turn):
-            if any(c["id"] not in answered for c in message.get("tool_calls") or []):
-                turn = turn[:n]
-                break
+        ran = any(m["role"] == "tool" for m in turn)
         # What the model wrote but the caller never heard is replaced by what they did hear
         turn = [
             {**m, "content": None} if m.get("tool_calls") else m
-            for m in turn
+            for m in _close_open_calls(turn)
             if m["role"] != "assistant" or m.get("tool_calls")
         ]
         for action_id in [a for a, p in self.pending.items() if p.turn == self.turns]:
             del self.pending[action_id]
-        if len(turn) == 1 and not heard:
+        if not ran and not heard:
             del self.messages[self.turn_start :]
             self.turns -= 1
             return True
@@ -107,7 +101,7 @@ class Receptionist:
         try:
             for _ in range(self.max_rounds):
                 now = self.now()
-                messages = [{"role": "system", "content": system_prompt(now, conversation.language)}, *history]
+                messages = [{"role": "system", "content": system_prompt(now)}, *history]
                 for attempt in (1, 2):
                     text, calls, streamed = "", [], False
                     try:
@@ -153,8 +147,11 @@ class Receptionist:
                 log.warning("Turn hit max_tool_rounds=%s without a final reply", self.max_rounds)
         except Exception as exc:
             log.exception("Model call failed")
-            # Drop the half-finished turn: a tool call without its result would break the next request
-            del history[turn_start:]
+            if any(m["role"] == "tool" for m in history[turn_start:]):
+                # Keep what the tools did (a booking may already be confirmed), so history matches the database
+                history[turn_start:] = _close_open_calls(history[turn_start:])
+            else:
+                del history[turn_start:]
             for action_id in [a for a, p in conversation.pending.items() if p.turn == conversation.turns]:
                 del conversation.pending[action_id]
             yield {"type": "error", "message": str(exc)}
@@ -173,6 +170,15 @@ class Receptionist:
         with self.session_factory() as session:
             ctx = ToolContext(session, now, conversation.turns, conversation.pending)
             return run_tool(ctx, name, arguments)
+
+
+def _close_open_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Give the tool calls that never ran a result saying so. A batch without all its results breaks the next
+    request, and dropping the batch instead would lose what the calls that did run changed."""
+    answered = {m["tool_call_id"] for m in messages if m["role"] == "tool"}
+    missing = [c["id"] for m in messages for c in m.get("tool_calls") or [] if c["id"] not in answered]
+    not_run = json.dumps({"error": "Not run: the call was cut off before this tool ran"})
+    return [*messages, *({"role": "tool", "tool_call_id": i, "content": not_run} for i in missing)]
 
 
 async def _uninterrupted(coro: Awaitable[Any]) -> Any:

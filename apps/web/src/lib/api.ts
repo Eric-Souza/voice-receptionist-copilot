@@ -1,4 +1,4 @@
-import type { Appointment, Clinic, Language } from "./types";
+import type { Appointment, Clinic } from "./types";
 
 // Empty in development (Vite proxies /api and /ws); the API's origin in a deployed build
 const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
@@ -14,7 +14,7 @@ export const fetchClinic = () => get<Clinic>("/api/clinic");
 export const fetchAppointments = (start: string, days = 7) =>
   get<Appointment[]>(`/api/appointments?start=${start}&days=${days}`);
 
-export function voiceUrl(language: Language): string {
+export function voiceUrl(): string {
   const origin = BASE || location.origin;
-  return `${origin.replace(/^http/, "ws")}/ws/voice?language=${language}`;
+  return `${origin.replace(/^http/, "ws")}/ws/voice`;
 }

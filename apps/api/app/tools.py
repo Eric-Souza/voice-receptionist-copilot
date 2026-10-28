@@ -91,11 +91,13 @@ def run_tool(ctx: ToolContext, name: str, arguments: str) -> dict[str, Any]:
             raise ValueError
     except ValueError:
         return {"error": "The tool arguments weren't valid JSON."}
+    # Models often send null for an optional argument they mean to leave out
+    args = {key: value for key, value in args.items() if value is not None}
     try:
         return TOOLS[name].run(ctx, **args)
     except SchedulingError as exc:
         return {"error": str(exc)}
-    except TypeError as exc:  # missing or unexpected arguments
+    except (TypeError, AttributeError) as exc:  # missing or unexpected arguments, or a number where text goes
         return {"error": f"Bad arguments for {name}: {exc}"}
 
 
@@ -123,23 +125,16 @@ def _fmt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M")
 
 
-_WEEKDAYS_PT = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
-
-
 def _ordinal(n: int) -> str:
     suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     return f"{n}{suffix}"
 
 
-def _spoken(dt: datetime) -> dict[str, str]:
-    """How to say a time aloud, so the model doesn't have to convert ISO times (it tends to say "13h" in English)."""
+def _spoken(dt: datetime) -> str:
+    """How to say a time aloud, so the model doesn't have to convert ISO times (it tends to say "14:00")."""
     hour12 = dt.hour % 12 or 12
-    clock_en = f"{hour12}{dt.minute and f':{dt.minute:02d}' or ''} {'am' if dt.hour < 12 else 'pm'}"
-    clock_pt = f"{dt.hour}h{dt.minute and f'{dt.minute:02d}' or ''}"
-    return {
-        "en": f"{dt:%A} the {_ordinal(dt.day)} at {clock_en}",
-        "pt": f"{_WEEKDAYS_PT[dt.weekday()]}, dia {dt.day}, às {clock_pt}",
-    }
+    clock = f"{hour12}{dt.minute and f':{dt.minute:02d}' or ''} {'am' if dt.hour < 12 else 'pm'}"
+    return f"{dt:%A} the {_ordinal(dt.day)} at {clock}"
 
 
 def _describe(appt: Appointment) -> dict[str, Any]:
@@ -148,7 +143,7 @@ def _describe(appt: Appointment) -> dict[str, Any]:
         "appointment_id": appt.id,
         "patient_name": appt.patient_name,
         "service": appt.service,
-        "service_name": service.name_en,
+        "service_name": service.name,
         "dentist": DENTISTS[appt.dentist_id].name,
         "start": _fmt(appt.start),
         "say": _spoken(appt.start),
@@ -181,7 +176,7 @@ def _owned_appointment(ctx: ToolContext, appointment_id: int, patient_phone: str
 
 _SERVICE = {"type": "string", "enum": list(SERVICES), "description": "Service key"}
 _DENTIST = {"type": "string", "enum": list(DENTISTS), "description": "Dentist id; omit for any dentist"}
-_PHONE = {"type": "string", "description": "Caller's phone number, digits with area code (DDD)"}
+_PHONE = {"type": "string", "description": "Caller's 10-digit phone number, with area code"}
 _APPT_ID = {"type": "integer", "description": "appointment_id from find_appointments"}
 
 
@@ -231,7 +226,12 @@ def check_availability(
     if not slots:
         result["note"] = "Nothing free in that range. Try more days, another part of the day, or any dentist."
     elif len(slots) == MAX_SLOTS:
-        result["note"] = f"Only the earliest {MAX_SLOTS} times; later times may be free too. Search a later date."
+        # Without the day spelled out, the model took "no Friday slots listed" to mean Friday was full
+        last = max(by_start)
+        result["note"] = (
+            f"Only the earliest {MAX_SLOTS} times, up to {last:%A} the {_ordinal(last.day)}. Later days weren't "
+            "searched and may well be free; to check one, call again with date set to that day."
+        )
     return result
 
 
@@ -275,7 +275,7 @@ def book_appointment(
         "action": "book",
         "patient_name": patient_name.strip(),
         "patient_phone": phone,
-        "service_name": SERVICES[service].name_en,
+        "service_name": SERVICES[service].name,
         "dentist": DENTISTS[dentist_id].name,
         "say": _spoken(booking["start"]),
     }
@@ -387,8 +387,9 @@ def confirm_action(ctx: ToolContext, action_id: str) -> dict[str, Any]:
         raise SchedulingError(
             "The caller hasn't answered yet. Read the details back as a question, end your turn and wait."
         )
+    result = pending.run(ctx)
     del ctx.pending[action_id]
-    return pending.run(ctx)
+    return result
 
 
 @lru_cache

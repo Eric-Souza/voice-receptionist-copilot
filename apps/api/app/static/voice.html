@@ -10,7 +10,6 @@
   .bar { display: flex; gap: .6rem; align-items: center; margin: 1rem 0; }
   button { font: inherit; padding: .45rem 1.1rem; border-radius: 6px; border: 1px solid #0f766e; background: #0f766e; color: white; cursor: pointer; }
   button.stop { background: white; color: #0f766e; }
-  select { font: inherit; padding: .4rem; }
   .status { padding: .15rem .6rem; border-radius: 999px; background: #e5e7eb; font-size: .85rem; }
   .status.listening { background: #dcfce7; } .status.speaking-you { background: #bbf7d0; font-weight: 600; }
   .status.thinking { background: #fef9c3; } .status.sofia { background: #dbeafe; }
@@ -21,12 +20,11 @@
 </style>
 </head>
 <body>
-<h1>Sofia, Clínica Sorriso Paulista</h1>
+<h1>Sofia, Brightside Dental</h1>
 <div>Voice test page. You can talk over Sofia to interrupt her. If she keeps interrupting herself (her voice leaking
 from the speakers into the mic), use headphones or turn interruptions off.</div>
 <div class="bar">
   <button id="call">Start call</button>
-  <select id="language"><option value="pt">Português</option><option value="en">English</option></select>
   <label><input type="checkbox" id="bargein" checked> Let me interrupt</label>
   <span id="status" class="status">idle</span>
 </div>
@@ -93,7 +91,7 @@ function onEvent(e) {
   switch (e.type) {
     case "vad": userSpeaking = e.speaking; break;
     case "transcript":
-      if (e.text) { thinking = true; line("you", "You: " + e.text + (e.language ? `  [${e.language}]` : "")); sofiaLine = line("sofia", "Sofia: "); }
+      if (e.text) { thinking = true; line("you", "You: " + e.text); sofiaLine = line("sofia", "Sofia: "); }
       break;
     case "interrupt":
       stopPlayback(); thinking = false;
@@ -118,7 +116,7 @@ async function start() {
   micCtx.createMediaStreamSource(micStream).connect(node);
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/voice?language=${$("language").value}`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/voice`);
   ws.binaryType = "arraybuffer";
   let sampleRate = 24000;
   ws.onmessage = (m) => {
@@ -130,7 +128,9 @@ async function start() {
       play(m.data, sampleRate);
     }
   };
-  ws.onclose = () => { stop(); };
+  // Only if it's still this call's socket: an old one can close after a new call has started
+  const sock = ws;
+  ws.onclose = () => { if (ws === sock) stop(); };
   // With interruptions off, the mic is muted while Sofia talks, so she can't hear herself
   node.port.onmessage = (m) => { if (ws.readyState === 1 && ($("bargein").checked || !playing())) ws.send(m.data); };
   statusTimer = setInterval(showStatus, 100);
@@ -146,7 +146,13 @@ function stop() {
   $("call").textContent = "Start call"; $("call").className = ""; setStatus("idle", "");
 }
 
-$("call").onclick = () => (ws ? stop() : start().catch((err) => { line("error", "Error: " + err.message); stop(); }));
+let starting = false;  // a second click while the mic prompt is up would start a second call
+$("call").onclick = () => {
+  if (ws) return stop();
+  if (starting) return;
+  starting = true;
+  start().catch((err) => { line("error", "Error: " + err.message); stop(); }).finally(() => { starting = false; });
+};
 </script>
 </body>
 </html>

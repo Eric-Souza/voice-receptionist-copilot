@@ -2,7 +2,7 @@ import json
 
 from app.tools import TOOLS, clinic_info, run_tool, tool_schemas
 
-PHONE = "11 98765-4321"
+PHONE = "512-555-0199"
 
 
 CHANGE_TOOLS = {"book_appointment", "reschedule_appointment", "cancel_appointment"}
@@ -21,11 +21,11 @@ def call(ctx, name, **args):
     return result
 
 
-def book_thursday(ctx, time="09:00", service="checkup", dentist="ana"):
+def book_thursday(ctx, time="09:00", service="checkup", dentist="anna"):
     return call(
         ctx,
         "book_appointment",
-        patient_name="Ana Paula",
+        patient_name="Jane Doe",
         patient_phone=PHONE,
         service=service,
         start=f"2026-10-29T{time}",
@@ -48,8 +48,8 @@ def test_check_availability_groups_dentists_and_caps_results(ctx):
     assert len(result["slots"]) == 6
     first = result["slots"][0]
     assert first["start"] == "2026-10-29T08:00"
-    assert first["say"] == {"en": "Thursday the 29th at 8 am", "pt": "quinta, dia 29, às 8h"}
-    assert {d["id"] for d in first["dentists"]} == {"ana", "bruno", "carla"}
+    assert first["say"] == "Thursday the 29th at 8 am"
+    assert {d["id"] for d in first["dentists"]} == {"anna", "brian", "carla"}
 
 
 def test_check_availability_searches_ahead_over_closed_days(ctx):
@@ -63,6 +63,20 @@ def test_check_availability_reports_empty_ranges(ctx):
     assert result["slots"] == [] and "note" in result
 
 
+def test_check_availability_says_where_a_cut_off_list_ends(ctx):
+    result = call(ctx, "check_availability", service="checkup", date="2026-10-29", days=7)
+    assert len(result["slots"]) == 6 and {s["start"][:10] for s in result["slots"]} == {"2026-10-29"}
+    assert "up to Thursday the 29th" in result["note"]
+
+
+def test_null_optional_arguments_are_left_out(ctx):
+    handoff = call(ctx, "handoff_to_human", reason="Wants a quote", patient_phone=PHONE, patient_name=None)
+    assert handoff["handoff_id"]
+    args = dict(patient_phone=PHONE, service="checkup", start="2026-10-29T09:00", dentist_id="anna")
+    assert "patient_name" in propose(ctx, "book_appointment", patient_name=None, **args)["error"]
+    assert "booked" in call(ctx, "book_appointment", patient_name="Jane Doe", notes=None, **args)
+
+
 def test_bad_input_comes_back_as_an_error(ctx):
     assert "error" in call(ctx, "check_availability", service="botox", date="2026-10-29")
     assert "error" in call(ctx, "check_availability", service="checkup", date="next thursday")
@@ -70,13 +84,14 @@ def test_bad_input_comes_back_as_an_error(ctx):
     assert "error" in call(ctx, "check_availability", service="checkup")  # missing date
     assert "error" in run_tool(ctx, "check_availability", "{not json")
     assert "error" in run_tool(ctx, "make_coffee", "{}")
+    assert "error" in call(ctx, "get_clinic_info", topic=42)
 
 
 def test_book_find_reschedule_cancel(ctx):
     booked = book_thursday(ctx, service="cleaning")["booked"]
-    assert booked["dentist"] == "Dra. Ana Ribeiro" and booked["start"] == "2026-10-29T09:00"
+    assert booked["dentist"] == "Dr. Anna Reed" and booked["start"] == "2026-10-29T09:00"
 
-    found = call(ctx, "find_appointments", patient_phone="(11) 98765-4321")["appointments"]
+    found = call(ctx, "find_appointments", patient_phone="(512) 555-0199")["appointments"]
     assert [a["appointment_id"] for a in found] == [booked["appointment_id"]]
 
     moved = call(
@@ -103,7 +118,7 @@ def test_reschedule_can_switch_dentist_but_not_to_one_without_the_service(ctx):
         appointment_id=appt_id,
         patient_phone=PHONE,
         new_start="2026-10-29T10:00",
-        dentist_id="bruno",
+        dentist_id="brian",
     )
     assert "doesn't do" in bad["error"]
     ok = call(
@@ -114,29 +129,29 @@ def test_reschedule_can_switch_dentist_but_not_to_one_without_the_service(ctx):
         new_start="2026-10-29T10:00",
         dentist_id="carla",
     )
-    assert ok["rescheduled"]["dentist"] == "Dra. Carla Mendes"
+    assert ok["rescheduled"]["dentist"] == "Dr. Carla Mendez"
 
 
 def test_reschedule_switches_dentist_when_the_current_one_is_busy(ctx):
     appt_id = book_thursday(ctx, service="cleaning")["booked"]["appointment_id"]
-    book_thursday(ctx, time="10:00", service="cleaning")  # Dra. Ana is now busy at 10:00
+    book_thursday(ctx, time="10:00", service="cleaning")  # Dr. Reed is now busy at 10:00
     args = dict(appointment_id=appt_id, patient_phone=PHONE, new_start="2026-10-29T10:00")
     moved = call(ctx, "reschedule_appointment", **args)
-    assert moved["rescheduled"]["dentist"] == "Dra. Carla Mendes"
+    assert moved["rescheduled"]["dentist"] == "Dr. Carla Mendez"
 
 
 def test_changes_wait_for_the_callers_next_turn(ctx):
     proposal = propose(
         ctx,
         "book_appointment",
-        patient_name="Ana Paula",
+        patient_name="Jane Doe",
         patient_phone=PHONE,
         service="checkup",
         start="2026-10-29T09:00",
-        dentist_id="ana",
+        dentist_id="anna",
     )
     pending = proposal["pending"]
-    assert pending["say"]["en"] == "Thursday the 29th at 9 am" and pending["patient_phone"] == "11987654321"
+    assert pending["say"] == "Thursday the 29th at 9 am" and pending["patient_phone"] == "5125550199"
     assert call(ctx, "find_appointments", patient_phone=PHONE)["appointments"] == []
 
     # Confirming in the same turn it was proposed is refused: the caller hasn't heard the read-back yet
@@ -151,10 +166,10 @@ def test_changes_wait_for_the_callers_next_turn(ctx):
 
 
 def test_proposals_are_validated_up_front_and_again_on_confirm(ctx):
-    args = dict(patient_name="Ana Paula", service="checkup", start="2026-10-29T09:00", dentist_id="ana")
+    args = dict(patient_name="Jane Doe", service="checkup", start="2026-10-29T09:00", dentist_id="anna")
     assert "phone" in propose(ctx, "book_appointment", patient_phone="123", **args)["error"]
     first = propose(ctx, "book_appointment", patient_phone=PHONE, **args)["pending"]
-    second = propose(ctx, "book_appointment", patient_phone="11900000000", **args)["pending"]
+    second = propose(ctx, "book_appointment", patient_phone="5125550198", **args)["pending"]
     ctx.turn += 1
     assert "booked" in propose(ctx, "confirm_action", action_id=second["action_id"])
     # The slot went to the other caller in the meantime
@@ -170,7 +185,7 @@ def test_cancel_is_only_a_proposal_until_confirmed(ctx):
 
 def test_other_callers_cant_touch_an_appointment(ctx):
     appt_id = book_thursday(ctx)["booked"]["appointment_id"]
-    result = call(ctx, "cancel_appointment", appointment_id=appt_id, patient_phone="11900000000")
+    result = call(ctx, "cancel_appointment", appointment_id=appt_id, patient_phone="5125550198")
     assert "error" in result
 
 
@@ -185,12 +200,12 @@ def test_spoken_times():
     from app.tools import _spoken
 
     monday = _spoken(datetime(2026, 11, 2, 14, 30))
-    assert monday == {"en": "Monday the 2nd at 2:30 pm", "pt": "segunda, dia 2, às 14h30"}
-    assert _spoken(datetime(2026, 11, 11, 12, 0))["en"] == "Wednesday the 11th at 12 pm"
+    assert monday == "Monday the 2nd at 2:30 pm"
+    assert _spoken(datetime(2026, 11, 11, 12, 0)) == "Wednesday the 11th at 12 pm"
 
 
 def test_clinic_info_and_handoff(ctx):
-    assert "Amil" in call(ctx, "get_clinic_info", topic="insurance")["info"]
+    assert "Delta Dental" in call(ctx, "get_clinic_info", topic="insurance")["info"]
     assert "error" in call(ctx, "get_clinic_info", topic="weather")
     assert set(clinic_info()) >= {"location", "parking", "emergencies", "contact"}
     handoff = call(ctx, "handoff_to_human", reason="Wants a quote for implants", patient_phone=PHONE)

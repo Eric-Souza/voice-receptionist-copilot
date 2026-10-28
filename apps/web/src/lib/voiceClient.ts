@@ -2,7 +2,7 @@
 // sentence. Audio goes up all the time so the server can hear the caller talk over her.
 
 import { voiceUrl } from "./api";
-import type { Language, ServerEvent } from "./types";
+import type { ServerEvent } from "./types";
 
 const MIC_RATE = 16_000;
 const CHUNK = MIC_RATE / 10; // 100 ms
@@ -10,7 +10,6 @@ const CHUNK = MIC_RATE / 10; // 100 ms
 const ECHO_TAIL_S = 0.3;
 
 export interface VoiceClientOptions {
-  language: Language;
   onEvent: (event: ServerEvent, at: number) => void;
   onClose: (error?: string) => void;
   onLevel?: (level: number) => void;
@@ -47,8 +46,11 @@ export class VoiceClient {
   async start(): Promise<void> {
     // Created in the click handler, so the browser lets it play
     this.playCtx = new AudioContext();
-    this.input = this.options.feed ? this.feedInput() : await this.micInput();
-    const ws = new WebSocket(voiceUrl(this.options.language));
+    const input = this.options.feed ? this.feedInput() : await this.micInput();
+    // The caller may have hung up while the browser was asking for the mic
+    if (this.closed) return input.stop();
+    this.input = input;
+    const ws = new WebSocket(voiceUrl());
     ws.binaryType = "arraybuffer";
     ws.onmessage = (m) => {
       if (typeof m.data === "string") {

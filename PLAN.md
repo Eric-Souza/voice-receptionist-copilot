@@ -1,6 +1,6 @@
 # Voice Receptionist Copilot: plan
 
-A browser voice agent for a fictional Brazilian dental clinic (Clínica Sorriso Paulista, São Paulo). Callers talk in Portuguese or English; the agent answers questions about the clinic and books, reschedules or cancels appointments through tool calls, and can be interrupted mid-sentence.
+A browser voice agent for a fictional US dental clinic (Brightside Dental, Austin, Texas), in American English. The agent answers questions about the clinic and books, reschedules or cancels appointments through tool calls, and can be interrupted mid-sentence.
 
 ## Stack (free)
 
@@ -9,7 +9,7 @@ A browser voice agent for a fictional Brazilian dental clinic (Clínica Sorriso 
 | Backend | Python, FastAPI, WebSockets |
 | Speech-to-text | Groq `whisper-large-v3-turbo` (free tier, OpenAI-compatible) |
 | LLM | Groq `openai/gpt-oss-120b` through the official `openai` SDK, with tool calling; `openai/gpt-oss-20b` when the first hits its daily free-tier cap |
-| Text-to-speech | Kokoro-82M locally (pt-BR and English voices), `edge-tts` as a backup |
+| Text-to-speech | Kokoro-82M locally (American English voice `af_heart`), `edge-tts` as a backup |
 | Turn detection | Silero VAD on the server |
 | Data | SQLite + SQLModel |
 | Frontend | React + Vite + Tailwind |
@@ -39,5 +39,5 @@ Booking, rescheduling and cancelling only propose a change. `confirm_action` car
 2. **Voice** (done): WebSocket audio, VAD, Whisper, Kokoro, sentence-by-sentence speech. The first live turn took 4.8 s to first audio: STT 0.7 s, then 2.4 s for the LLM's first text and 1.8 s to synthesize a long first sentence.
 3. **Barge-in and timing** (done): cancel replies mid-stream and keep only what the caller heard, per-turn latency logs, a filler while tools run, a short first piece. Live, first audio now comes 1.7-2.0 s after the end of speech (it was 4.8 s), and the first words of the actual reply about 1 s later on turns with tools. Not counted in those numbers: the 600 ms of silence that tells us the caller is done. Still open: a faster model for turns without tools, and the 20b fallback's 8K tokens-per-minute cap, which adds seconds once 120b's daily quota is gone.
 4. **Frontend** (done): React app with mic, live transcript, tool timeline, latency numbers and a bookings calendar that highlights confirmed changes. Driven end to end in a browser by recorded caller clips (a dev-only feed mode), it booked a cleaning in four turns with a median of 1.7 s to first audio. Not yet tried: a real mic in a browser, and how well echo cancellation stops Sofia from interrupting herself without headphones.
-5. **Bilingual and clinic info**: PT/EN detection and voices, retrieval over clinic docs if they outgrow topic lookup.
+5. **Clinic info and polish**: a shorter end-of-speech wait, a faster model for turns without tools, retrieval over clinic docs if they outgrow topic lookup.
 6. **Deploy and write-up**: Spaces + Vercel, README with GIF, Medium article, LinkedIn project.

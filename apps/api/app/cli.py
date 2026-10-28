@@ -1,11 +1,10 @@
 """Talk to the receptionist in the terminal (text only), showing its tool calls.
 
-python -m app.cli [--en]
+python -m app.cli
 """
 
 import asyncio
 import json
-import sys
 
 from app.agent import Conversation, Receptionist
 from app.db import init_db
@@ -20,10 +19,8 @@ async def main() -> None:
     init_db()
     seed_if_empty()
     receptionist = Receptionist(get_chat_model())
-    language = "en" if "--en" in sys.argv else "pt"
-    greeting = GREETING[language]
-    conversation = Conversation([{"role": "assistant", "content": greeting}], language)
-    print(f"Sofia: {greeting}\n(Ctrl+C or an empty line to quit)\n")
+    conversation = Conversation([{"role": "assistant", "content": GREETING}])
+    print(f"Sofia: {GREETING}\n(Ctrl+C or an empty line to quit)\n")
     while True:
         try:
             text = input("You: ").strip()

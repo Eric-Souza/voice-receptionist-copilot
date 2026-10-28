@@ -33,7 +33,7 @@ def load_services(settings: Settings | None = None) -> VoiceServices:
     tts = KokoroTTS(
         settings.models_dir / "kokoro-v1.0.int8.onnx",
         settings.models_dir / "voices-v1.0.bin",
-        {"pt": settings.tts_voice_pt, "en": settings.tts_voice_en},
+        settings.tts_voice,
         settings.tts_speed,
     )
     return VoiceServices(vad=vad.stream, stt=Whisper(client, settings.resolved_stt_model), tts=tts)

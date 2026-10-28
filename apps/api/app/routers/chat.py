@@ -8,16 +8,12 @@ from pydantic import BaseModel
 from sqlmodel import select
 
 from app.agent import Conversation, clinic_now
-from app.clinic import CLINIC_NAME, DENTISTS, HOURS, SERVICES, SLOT_MINUTES
+from app.clinic import CLINIC_CITY, CLINIC_NAME, DENTISTS, HOURS, SERVICES, SLOT_MINUTES
 from app.db import new_session
 from app.models import Appointment
 from app.prompts import GREETING
 
 router = APIRouter(prefix="/api")
-
-
-class NewSession(BaseModel):
-    language: str = "pt"
 
 
 class Message(BaseModel):
@@ -32,15 +28,11 @@ def _conversation(request: Request, session_id: str) -> Conversation:
 
 
 @router.post("/sessions")
-async def create_session(request: Request, body: NewSession | None = None) -> dict:
-    language = (body or NewSession()).language
-    language = language if language in GREETING else "pt"
-    greeting = GREETING[language]
+async def create_session(request: Request) -> dict:
     session_id = uuid.uuid4().hex
     # The greeting is part of the history so the model knows it already introduced itself
-    conversation = Conversation([{"role": "assistant", "content": greeting}], language)
-    request.app.state.conversations[session_id] = conversation
-    return {"session_id": session_id, "greeting": greeting}
+    request.app.state.conversations[session_id] = Conversation([{"role": "assistant", "content": GREETING}])
+    return {"session_id": session_id, "greeting": GREETING}
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -85,6 +77,7 @@ async def list_appointments(start: date | None = None, days: int = 7) -> list[di
 async def clinic() -> dict:
     return {
         "name": CLINIC_NAME,
+        "city": CLINIC_CITY,
         # The clinic's own clock, so the calendar opens on the right day whatever the browser's time zone
         "now": clinic_now().isoformat(timespec="minutes"),
         "slot_minutes": SLOT_MINUTES,
@@ -92,7 +85,6 @@ async def clinic() -> dict:
         "hours": {day: [[f"{a:%H:%M}", f"{b:%H:%M}"] for a, b in blocks] for day, blocks in HOURS.items()},
         "dentists": [{"id": d.id, "name": d.name, "services": list(d.services)} for d in DENTISTS.values()],
         "services": [
-            {"key": s.key, "name_pt": s.name_pt, "name_en": s.name_en, "minutes": s.minutes, "price_brl": s.price_brl}
-            for s in SERVICES.values()
+            {"key": s.key, "name": s.name, "minutes": s.minutes, "price_usd": s.price_usd} for s in SERVICES.values()
         ],
     }

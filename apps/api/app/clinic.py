@@ -3,16 +3,16 @@
 from dataclasses import dataclass
 from datetime import time
 
-CLINIC_NAME = "Clínica Sorriso Paulista"
+CLINIC_NAME = "Brightside Dental"
+CLINIC_CITY = "Austin, Texas"
 
 
 @dataclass(frozen=True)
 class Service:
     key: str
-    name_pt: str
-    name_en: str
+    name: str
     minutes: int
-    price_brl: int  # 0 = free
+    price_usd: int  # 0 = free
 
 
 @dataclass(frozen=True)
@@ -25,22 +25,22 @@ class Dentist:
 SERVICES = {
     s.key: s
     for s in [
-        Service("checkup", "Avaliação", "Check-up", 30, 0),
-        Service("cleaning", "Limpeza", "Cleaning", 45, 180),
-        Service("filling", "Restauração", "Filling", 60, 250),
-        Service("whitening", "Clareamento", "Whitening", 60, 900),
-        Service("root_canal", "Tratamento de canal", "Root canal", 90, 1200),
-        Service("extraction", "Extração", "Extraction", 45, 350),
-        Service("braces_adjustment", "Manutenção de aparelho", "Braces adjustment", 30, 200),
+        Service("checkup", "Check-up", 30, 0),
+        Service("cleaning", "Cleaning", 45, 120),
+        Service("filling", "Filling", 60, 180),
+        Service("whitening", "Whitening", 60, 450),
+        Service("root_canal", "Root canal", 90, 1100),
+        Service("extraction", "Extraction", 45, 250),
+        Service("braces_adjustment", "Braces adjustment", 30, 150),
     ]
 }
 
 DENTISTS = {
     d.id: d
     for d in [
-        Dentist("ana", "Dra. Ana Ribeiro", ("checkup", "cleaning", "filling", "whitening")),
-        Dentist("bruno", "Dr. Bruno Tanaka", ("checkup", "filling", "root_canal", "extraction")),
-        Dentist("carla", "Dra. Carla Mendes", ("checkup", "cleaning", "braces_adjustment")),
+        Dentist("anna", "Dr. Anna Reed", ("checkup", "cleaning", "filling", "whitening")),
+        Dentist("brian", "Dr. Brian Tanaka", ("checkup", "filling", "root_canal", "extraction")),
+        Dentist("carla", "Dr. Carla Mendez", ("checkup", "cleaning", "braces_adjustment")),
     ]
 }
 

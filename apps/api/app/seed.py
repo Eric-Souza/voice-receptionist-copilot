@@ -16,14 +16,14 @@ from app.models import Appointment, Handoff
 from app.scheduling import book, free_slots
 
 PATIENTS = [
-    ("Mariana Costa", "11987650001"),
-    ("João Pereira", "11987650002"),
-    ("Fernanda Lima", "11987650003"),
-    ("Rafael Souza", "11987650004"),
-    ("Beatriz Almeida", "11987650005"),
-    ("Lucas Oliveira", "11987650006"),
-    ("Camila Rocha", "11987650007"),
-    ("Pedro Santos", "11987650008"),
+    ("Emily Carter", "5125550101"),
+    ("Michael Johnson", "5125550102"),
+    ("Sarah Thompson", "5125550103"),
+    ("David Martinez", "5125550104"),
+    ("Jessica Lee", "5125550105"),
+    ("Chris Walker", "5125550106"),
+    ("Ashley Brooks", "5125550107"),
+    ("Daniel Kim", "5125550108"),
 ]
 FILL_RATE = 0.35
 DAYS = 14

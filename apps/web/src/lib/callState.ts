@@ -1,7 +1,7 @@
 // Folds the server's event stream into what the UI shows: one entry per exchange, with its tool calls and timings.
 // Pure, so it's unit-tested without a browser; `at` is the client clock (performance.now()) when an event arrived.
 
-import type { Language, ServerEvent, Timings } from "./types";
+import type { ServerEvent, Timings } from "./types";
 
 export interface ToolCall {
   id: string;
@@ -15,7 +15,7 @@ export interface ToolCall {
 export interface Turn {
   id: number;
   kind: "greeting" | "exchange";
-  caller?: { text: string; language: Language | null };
+  caller?: { text: string };
   sofia: string; // what she said (or is saying, while it streams)
   filler?: string; // the "one moment" said while a tool ran
   status: "replying" | "done" | "interrupted" | "failed";
@@ -30,7 +30,6 @@ export type AppointmentChange = { id: number; action: "booked" | "rescheduled" |
 
 export interface CallState {
   status: "idle" | "connecting" | "live" | "ended";
-  language: Language;
   callerSpeaking: boolean;
   turns: Turn[];
   // Bumped on every confirmed change, so the calendar knows to reload and what to highlight
@@ -41,13 +40,12 @@ export interface CallState {
 }
 
 export type CallAction =
-  | { type: "connect"; language: Language }
+  | { type: "connect" }
   | { type: "closed"; error?: string }
   | { type: "event"; event: ServerEvent; at: number };
 
 export const initialCall: CallState = {
   status: "idle",
-  language: "pt",
   callerSpeaking: false,
   turns: [],
   nextId: 1,
@@ -71,16 +69,16 @@ function updateLast(state: CallState, update: (turn: Turn) => Turn): CallState {
 }
 
 export function callReducer(state: CallState, action: CallAction): CallState {
-  if (action.type === "connect") return { ...initialCall, status: "connecting", language: action.language };
+  if (action.type === "connect") return { ...initialCall, status: "connecting" };
   if (action.type === "closed") {
     const turns = state.turns.map((t) => (t.status === "replying" ? { ...t, status: "done" as const } : t));
-    return { ...state, status: "ended", callerSpeaking: false, turns, error: action.error ?? state.error };
+    return { ...state, status: "ended", callerSpeaking: false, turns, error: state.error ?? action.error };
   }
 
   const { event, at } = action;
   switch (event.type) {
     case "ready":
-      return { ...state, status: "live", language: event.language };
+      return { ...state, status: "live" };
 
     case "vad":
       return { ...state, callerSpeaking: event.speaking, speechEndedAt: event.speaking ? state.speechEndedAt : at };
@@ -90,13 +88,14 @@ export function callReducer(state: CallState, action: CallAction): CallState {
       const turn: Turn = {
         id: state.nextId,
         kind: "exchange",
-        caller: { text: event.text, language: event.language },
+        caller: { text: event.text },
         sofia: "",
         status: "replying",
         tools: [],
         speechEndedAt: state.speechEndedAt ?? at,
       };
-      return { ...state, turns: [...state.turns, turn], nextId: state.nextId + 1 };
+      // (The caller got through, so an earlier "transcription failed" no longer applies)
+      return { ...state, error: undefined, turns: [...state.turns, turn], nextId: state.nextId + 1 };
     }
 
     case "reply":
@@ -144,7 +143,9 @@ export function callReducer(state: CallState, action: CallAction): CallState {
 
     case "interrupt": {
       const last = state.turns.at(-1);
-      if (!last || last.kind !== "exchange" || last.status === "interrupted") return state;
+      // Cut in before their words were transcribed: there's no exchange for them yet, and the one shown before
+      // was heard in full
+      if (event.transcribing || !last || last.kind !== "exchange" || last.status === "interrupted") return state;
       // Cut off before saying or doing anything: the server sends the caller's words again together with what
       // they went on to say, so this exchange is replaced by the next one
       if (last.status === "replying" && !event.heard && last.tools.length === 0) {

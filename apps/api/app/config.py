@@ -41,8 +41,7 @@ class Settings(BaseSettings):
     # Voice: model files come from `python -m app.voice.download`
     models_dir: Path = API_ROOT / "models"
     stt_model: str = ""
-    tts_voice_pt: str = "pf_dora"
-    tts_voice_en: str = "af_heart"
+    tts_voice: str = "af_heart"
     tts_speed: float = 1.05
     # Silero speech probability that counts as talking, and the pause that ends a caller's turn
     vad_threshold: float = 0.5
@@ -53,7 +52,7 @@ class Settings(BaseSettings):
     voice_turn_log: str = str(REPO_ROOT / "data" / "voice-turns.jsonl")
 
     database_url: str = f"sqlite:///{(REPO_ROOT / 'data' / 'clinic.db').as_posix()}"
-    clinic_timezone: str = "America/Sao_Paulo"
+    clinic_timezone: str = "America/Chicago"
 
     # Origins allowed to call the API from a browser (the Vite dev server by default)
     cors_origins: list[str] = ["http://localhost:5173"]

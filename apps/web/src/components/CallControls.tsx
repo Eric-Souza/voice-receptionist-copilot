@@ -1,5 +1,3 @@
-import type { Language } from "../lib/types";
-
 export type Activity = "idle" | "connecting" | "listening" | "caller" | "thinking" | "sofia";
 
 const ACTIVITY: Record<Activity, { label: string; style: string }> = {
@@ -14,8 +12,6 @@ const ACTIVITY: Record<Activity, { label: string; style: string }> = {
 interface Props {
   inCall: boolean;
   activity: Activity;
-  language: Language;
-  onLanguage: (language: Language) => void;
   allowInterrupt: boolean;
   onAllowInterrupt: (allow: boolean) => void;
   level: number;
@@ -40,17 +36,6 @@ export function CallControls(props: Props) {
       >
         {props.inCall ? "End call" : "Start call"}
       </button>
-
-      <select
-        aria-label="Call language"
-        value={props.language}
-        disabled={props.inCall}
-        onChange={(e) => props.onLanguage(e.target.value as Language)}
-        className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm disabled:opacity-60"
-      >
-        <option value="pt">Português</option>
-        <option value="en">English</option>
-      </select>
 
       <label className="flex items-center gap-2 text-sm text-slate-700" title="Turn off if Sofia keeps interrupting herself (no headphones)">
         <input

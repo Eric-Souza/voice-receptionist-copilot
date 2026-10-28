@@ -21,7 +21,7 @@ def dentists_for(service: str, dentist_id: str | None = None) -> list[str]:
         if dentist_id not in DENTISTS:
             raise SchedulingError(f"Unknown dentist '{dentist_id}'. Valid: {', '.join(DENTISTS)}.")
         if service not in DENTISTS[dentist_id].services:
-            raise SchedulingError(f"{DENTISTS[dentist_id].name} doesn't do {SERVICES[service].name_en}.")
+            raise SchedulingError(f"{DENTISTS[dentist_id].name} doesn't do {SERVICES[service].name}.")
         return [dentist_id]
     return [d.id for d in DENTISTS.values() if service in d.services]
 
@@ -130,8 +130,8 @@ def book(
 
 def normalize_phone(phone: str) -> str:
     digits = "".join(c for c in phone if c.isdigit())
-    if digits.startswith("55") and len(digits) in (12, 13):
-        digits = digits[2:]  # drop Brazil's country code
-    if not 8 <= len(digits) <= 15:
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]  # drop the +1 country code
+    if len(digits) != 10:
         raise SchedulingError("That phone number doesn't look right. Ask the caller to repeat it.")
     return digits
