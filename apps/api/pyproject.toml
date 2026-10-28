@@ -12,6 +12,10 @@ dependencies = [
   "openai>=1.60",
   # zoneinfo has no time zone data on Windows without it
   "tzdata",
+  # Voice: Silero VAD and Kokoro TTS run on ONNX Runtime, no PyTorch needed
+  "numpy",
+  "onnxruntime",
+  "kokoro-onnx",
 ]
 
 [project.optional-dependencies]

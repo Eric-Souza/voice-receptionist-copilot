@@ -13,6 +13,8 @@ PROVIDERS = {
     "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", "openai/gpt-oss-20b"),
     "openai": (None, "gpt-5-mini", ""),
 }
+# Speech-to-text model per provider (same API key as the chat model)
+STT_MODELS = {"groq": "whisper-large-v3-turbo", "openai": "whisper-1"}
 
 
 class Settings(BaseSettings):
@@ -36,6 +38,16 @@ class Settings(BaseSettings):
     # Model calls per caller turn; stops a confused model from looping on tools
     max_tool_rounds: int = 6
 
+    # Voice: model files come from `python -m app.voice.download`
+    models_dir: Path = API_ROOT / "models"
+    stt_model: str = ""
+    tts_voice_pt: str = "pf_dora"
+    tts_voice_en: str = "af_heart"
+    tts_speed: float = 1.05
+    # Silero speech probability that counts as talking, and the pause that ends a caller's turn
+    vad_threshold: float = 0.5
+    vad_min_silence_ms: int = 600
+
     database_url: str = f"sqlite:///{(REPO_ROOT / 'data' / 'clinic.db').as_posix()}"
     clinic_timezone: str = "America/Sao_Paulo"
 
@@ -53,6 +65,10 @@ class Settings(BaseSettings):
     @property
     def resolved_llm_model(self) -> str:
         return self.llm_model.strip() or PROVIDERS[self.llm_provider][1]
+
+    @property
+    def resolved_stt_model(self) -> str:
+        return self.stt_model.strip() or STT_MODELS[self.llm_provider]
 
     @property
     def resolved_fallback_models(self) -> list[str]:

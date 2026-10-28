@@ -13,3 +13,4 @@ dist/
 # Env and data
 .env
 data/*.db
+apps/api/models/

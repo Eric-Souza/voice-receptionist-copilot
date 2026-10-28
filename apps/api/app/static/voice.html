@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sofia: voice test</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1f2933; }
+  h1 { font-size: 1.3rem; margin-bottom: .2rem; }
+  .bar { display: flex; gap: .6rem; align-items: center; margin: 1rem 0; }
+  button { font: inherit; padding: .45rem 1.1rem; border-radius: 6px; border: 1px solid #0f766e; background: #0f766e; color: white; cursor: pointer; }
+  button.stop { background: white; color: #0f766e; }
+  select { font: inherit; padding: .4rem; }
+  .status { padding: .15rem .6rem; border-radius: 999px; background: #e5e7eb; font-size: .85rem; }
+  .status.listening { background: #dcfce7; } .status.speaking-you { background: #bbf7d0; font-weight: 600; }
+  .status.thinking { background: #fef9c3; } .status.sofia { background: #dbeafe; }
+  #log { border-top: 1px solid #e5e7eb; padding-top: .5rem; }
+  .you { margin-top: .8rem; font-weight: 600; } .sofia { margin-top: .3rem; }
+  .tool, .timing { color: #6b7280; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+  .error { color: #b91c1c; }
+</style>
+</head>
+<body>
+<h1>Sofia, Clínica Sorriso Paulista</h1>
+<div>Voice test page. Use headphones, or speakers with echo cancellation, and wait for Sofia to finish before you talk.</div>
+<div class="bar">
+  <button id="call">Start call</button>
+  <select id="language"><option value="pt">Português</option><option value="en">English</option></select>
+  <span id="status" class="status">idle</span>
+</div>
+<div id="log"></div>
+
+<script>
+const MIC_RATE = 16000;
+const $ = (id) => document.getElementById(id);
+let ws, micCtx, micStream, playCtx, statusTimer, playEnd = 0, sofiaLine = null;
+
+// Runs on the audio thread: downsample the mic to 16 kHz and post ~100 ms Int16 chunks
+const worklet = `
+class Mic extends AudioWorkletProcessor {
+  constructor() { super(); this.ratio = sampleRate / ${MIC_RATE}; this.pos = 0; this.out = []; }
+  process(inputs) {
+    const input = inputs[0][0];
+    if (!input) return true;
+    for (; this.pos < input.length; this.pos += this.ratio) {
+      const s = Math.max(-1, Math.min(1, input[Math.floor(this.pos)]));
+      this.out.push(s * 32767);
+    }
+    this.pos -= input.length;
+    if (this.out.length >= 1600) { this.port.postMessage(Int16Array.from(this.out).buffer, []); this.out = []; }
+    return true;
+  }
+}
+registerProcessor("mic", Mic);`;
+
+function line(cls, text) {
+  const div = document.createElement("div");
+  div.className = cls; div.textContent = text;
+  $("log").appendChild(div); div.scrollIntoView({ block: "end" });
+  return div;
+}
+function setStatus(text, cls) { $("status").textContent = text; $("status").className = "status " + (cls || ""); }
+const playing = () => playCtx && playCtx.currentTime < playEnd + 0.3;
+
+function play(bytes, rate) {
+  const pcm = new Int16Array(bytes);
+  const buffer = playCtx.createBuffer(1, pcm.length, rate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) data[i] = pcm[i] / 32768;
+  const source = playCtx.createBufferSource();
+  source.buffer = buffer; source.connect(playCtx.destination);
+  const at = Math.max(playCtx.currentTime + 0.05, playEnd);
+  source.start(at); playEnd = at + buffer.duration;
+  setStatus("Sofia is speaking", "sofia");
+}
+
+function onEvent(e) {
+  switch (e.type) {
+    case "ready": setStatus("listening", "listening"); break;
+    case "vad": if (e.speaking) setStatus("you're talking", "speaking-you"); else setStatus("thinking...", "thinking"); break;
+    case "transcript":
+      if (e.text) { line("you", "You: " + e.text + (e.language ? `  [${e.language}]` : "")); sofiaLine = line("sofia", "Sofia: "); }
+      else setStatus("listening", "listening");
+      break;
+    case "reply": if (!sofiaLine) sofiaLine = line("sofia", "Sofia: "); sofiaLine.textContent += e.delta; break;
+    case "tool_call": line("tool", `  -> ${e.name}(${JSON.stringify(e.arguments)})`); break;
+    case "tool_result": line("tool", `  <- ${JSON.stringify(e.result).slice(0, 240)}`); break;
+    case "audio": if (!sofiaLine) sofiaLine = line("sofia", "Sofia: " + e.text); break;
+    case "turn_done": line("timing", "  " + Object.entries(e.timings).map(([k, v]) => `${k} ${v}`).join(" · ")); sofiaLine = null; break;
+    case "error": line("error", "Error: " + e.message); break;
+  }
+}
+
+async function start() {
+  playCtx = new AudioContext();
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+  micCtx = new AudioContext();
+  await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([worklet], { type: "application/javascript" })));
+  const node = new AudioWorkletNode(micCtx, "mic");
+  micCtx.createMediaStreamSource(micStream).connect(node);
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws/voice?language=${$("language").value}`);
+  ws.binaryType = "arraybuffer";
+  let sampleRate = 24000;
+  ws.onmessage = (m) => {
+    if (typeof m.data === "string") {
+      const e = JSON.parse(m.data);
+      if (e.type === "ready") sampleRate = e.sample_rate;
+      onEvent(e);
+    } else {
+      play(m.data, sampleRate);
+    }
+  };
+  ws.onclose = () => { stop(); };
+  // Half duplex: don't send the mic while Sofia is talking, so she doesn't hear herself
+  node.port.onmessage = (m) => { if (ws.readyState === 1 && !playing()) ws.send(m.data); };
+  statusTimer = setInterval(() => { if (ws && ws.readyState === 1 && !playing() && $("status").textContent === "Sofia is speaking") setStatus("listening", "listening"); }, 200);
+  $("call").textContent = "End call"; $("call").className = "stop"; $("log").innerHTML = "";
+  setStatus("connecting...", "");
+}
+
+function stop() {
+  if (ws && ws.readyState <= 1) ws.close();
+  micStream?.getTracks().forEach((t) => t.stop());
+  micCtx?.close(); playCtx?.close(); clearInterval(statusTimer);
+  ws = micCtx = playCtx = micStream = null; playEnd = 0;
+  $("call").textContent = "Start call"; $("call").className = ""; setStatus("idle", "");
+}
+
+$("call").onclick = () => (ws ? stop() : start().catch((err) => { line("error", "Error: " + err.message); stop(); }));
+</script>
+</body>
+</html>

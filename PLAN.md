@@ -36,8 +36,8 @@ Booking, rescheduling and cancelling only propose a change. `confirm_action` car
 ## Milestones
 
 1. **Text-only core**: FastAPI, tools, SQLite, the streaming agent loop, a terminal chat, pytest with scripted conversations.
-2. **Voice**: WebSocket audio, VAD, Whisper, Kokoro, sentence-by-sentence speech.
-3. **Barge-in and timing**: cancel replies mid-stream, per-turn latency logs.
+2. **Voice** (done): WebSocket audio, VAD, Whisper, Kokoro, sentence-by-sentence speech. The first live turn took 4.8 s to first audio: STT 0.7 s, then 2.4 s for the LLM's first text and 1.8 s to synthesize a long first sentence.
+3. **Barge-in and timing**: cancel replies mid-stream, per-turn latency logs. Get toward the 1.5 s target: speak a long first sentence in clause-sized pieces, and try a faster model for turns without tools.
 4. **Frontend**: mic, live transcript, tool timeline, latency numbers, bookings calendar.
 5. **Bilingual and clinic info**: PT/EN detection and voices, retrieval over clinic docs if they outgrow topic lookup.
 6. **Deploy and write-up**: Spaces + Vercel, README with GIF, Medium article, LinkedIn project.
