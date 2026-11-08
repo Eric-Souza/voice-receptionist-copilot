@@ -2,7 +2,7 @@
 
 A voice receptionist for a fictional dental clinic in Austin, Texas, Brightside Dental. The agent, Sofia, answers questions about the clinic and books, reschedules or cancels appointments through tool calls.
 
-**Status:** milestone 4 of 6. The agent loop, tools, scheduling, SQLite, the HTTP API and a terminal chat came first, then voice: a WebSocket that takes mic audio and answers out loud. Then barge-in, so the caller can interrupt Sofia mid-sentence, and per-turn latency logs. Now there's a React web app: you talk to Sofia and watch her transcript, tool calls, latency and the clinic's bookings calendar live. Clinic-info polish and deployment come next; see [PLAN.md](PLAN.md).
+**Status:** milestone 5 of 7. The agent loop, tools, scheduling, SQLite, the HTTP API and a terminal chat came first, then voice: a WebSocket that takes mic audio and answers out loud. Then barge-in, so the caller can interrupt Sofia mid-sentence, and per-turn latency logs. Now there's a React web app: you talk to Sofia and watch her transcript, tool calls, latency and the clinic's bookings calendar live. The latest addition is guardrails: NeMo Guardrails screens what the caller says and every sentence Sofia says, without adding a round trip before she starts talking. Clinic-info polish and deployment come next; see [PLAN.md](PLAN.md).
 
 The whole stack runs on free tiers: Groq for the LLM and Whisper, with Silero VAD and Kokoro text-to-speech running locally on the CPU. Setting `LLM_PROVIDER=openai` switches to OpenAI's paid models.
 
@@ -75,7 +75,7 @@ npm run dev          # http://localhost:5173, proxies /api and /ws to :8000
 
 The page has four panels:
 - **Transcript:** the caller's words as Whisper heard them, and Sofia's reply as it streams. When you cut her off, the part you didn't hear is struck through.
-- **Tool calls:** each tool with its arguments and result, timed from the end of your speech, with a marker for when the first audio went out.
+- **Tool calls and guardrails:** each tool with its arguments and result, timed from the end of your speech, with a marker for when the first audio went out. Each turn's guardrail checks show as chips with their time, highlighted when one blocked.
 - **Latency:** for each turn, a bar split into speech-to-text, time to first audio, and the rest of the reply. Medians on top.
 - **Bookings:** the week's appointments, one lane per dentist, with lunch and closed hours shaded. When Sofia confirms a booking, a move or a cancellation, the calendar jumps to that week, reloads and highlights the appointment.
 
@@ -127,6 +127,16 @@ Design choices, mostly prompted by live testing:
 - **Whisper's noise is filtered out.** Segments it marks as probably not speech are dropped, and so are its usual subtitle hallucinations ("Thanks for watching!", "Subtitles by the Amara.org community").
 - **Clinic facts live in [data/clinic-info.md](data/clinic-info.md).** Each `## topic` section is one `get_clinic_info` answer.
 
+### Guardrails
+
+[NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) screens both sides of the call (`app/guard.py`, config in `app/rails/`), on Groq's free tier like the rest:
+
+- **Input rails** run on what Whisper heard: Meta's Prompt Guard 2 (an 86M jailbreak classifier) and a self check by `qwen/qwen3.8-27b` with a clinic-specific prompt (instructions or role changes, other patients' details, unrelated tasks, abuse). Both run in parallel with each other, and **in parallel with the model's first call**: the reply's text is held back and no tool runs until the verdict is in. A blocked turn gets a fixed refusal as soon as the verdict is in, without waiting for the model. Its audio is synthesized once after the greeting, so a refusal reaches first audio in about 0.8 s. The history keeps only "(withheld)", so the model never sees the attack.
+- **The output rail** checks each sentence, together with the reply so far, while Kokoro synthesizes it. A sentence that gives medical advice, leaks the prompt, mentions another patient or quotes a price not on the list is never sent; Sofia says a fixed line instead, the rest of the reply is dropped and the history is corrected. The transcript only shows sentences that passed. An opening "Sure!" or "Of course." skips its check: Kokoro has it ready in about 230 ms, before a check would be done, and the next sentence's check sees it anyway.
+- **Checks fail open.** On a 429 or timeout the turn goes through (`GUARDRAILS_FAIL_OPEN=false` refuses instead), because a receptionist that hangs up on every caller once the free quota runs out is worse. One catch: NeMo reports an exception from a custom action as a *block*, so the Prompt Guard action re-raises its errors as `LLMCallException`, the one kind NeMo passes on.
+
+`python -m evals.guardrails` scores the rails on 48 labeled caller turns and 28 replies (`apps/api/evals/`), and `python -m evals.guard_latency` and `python -m evals.first_audio` measure what they add to a real turn. Results are in [PLAN.md](PLAN.md#milestones). The web app shows each check in the transcript and the tool timeline.
+
 ## Layout
 
 ```
@@ -139,12 +149,15 @@ apps/api/app/
   scheduling.py         free slots and booking rules
   clinic.py             services, dentists, opening hours
   prompts.py            Sofia's system prompt
+  guard.py              NeMo Guardrails: input and output checks
+  rails/                rails config, Colang flows, self-check prompts, the Prompt Guard action
   routers/chat.py       HTTP API
   routers/voice.py      voice WebSocket and test page
   voice/                VAD, Whisper, Kokoro, speech text rewrites and the call loop
   static/voice.html     browser test page
   cli.py, seed.py       terminal chat, demo data
 apps/api/tests/         pytest, with a scripted fake model and fake STT and TTS
+apps/api/evals/         guardrail cases, the guardrail eval and a latency comparison
 apps/web/               React 19 + Vite + Tailwind
   public/mic-worklet.js   downsamples the mic to 16 kHz on the audio thread
   src/lib/voiceClient.ts  WebSocket, mic or feed input, sentence playback

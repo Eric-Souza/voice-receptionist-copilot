@@ -16,6 +16,9 @@ dependencies = [
   "numpy",
   "onnxruntime",
   "kokoro-onnx",
+  # Guardrails: NeMo runs the rails; its LLM is a LangChain chat model pointed at Groq
+  "nemoguardrails>=0.24",
+  "langchain-openai",
 ]
 
 [project.optional-dependencies]

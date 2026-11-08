@@ -6,9 +6,23 @@ export interface Timings {
   first_audio_ms?: number;
   total_ms?: number;
   tools?: string[];
+  input_guard_ms?: number;
+  input_guard_wait_ms?: number; // how long the input check held up words the model had already written
+  output_guard_ms?: number[];
+  blocked?: string; // the rail that blocked this turn
 }
 
-export type AudioKind = "reply" | "greeting" | "apology" | "filler";
+export type AudioKind = "reply" | "greeting" | "apology" | "filler" | "guardrail";
+
+export interface GuardCheck {
+  stage: "input" | "output";
+  allowed: boolean;
+  rail: string | null;
+  ms: number;
+  waited_ms?: number;
+  text?: string; // output: the sentence checked
+  error?: string; // the check failed and was let through
+}
 
 export type ServerEvent =
   | { type: "ready"; sample_rate: number }
@@ -17,6 +31,7 @@ export type ServerEvent =
   | { type: "reply"; delta: string }
   | { type: "tool_call"; id: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool_result"; id: string; name: string; result: Record<string, unknown> }
+  | ({ type: "guardrail" } & GuardCheck)
   | { type: "audio"; text: string; bytes: number; kind: AudioKind }
   | { type: "interrupt"; heard: string; transcribing?: boolean }
   | { type: "turn_done"; text: string; timings: Timings }

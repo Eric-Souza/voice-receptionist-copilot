@@ -1,5 +1,6 @@
 """Text conversations over HTTP: the voice WebSocket (milestone 2) drives the same Receptionist."""
 
+import asyncio
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -10,8 +11,10 @@ from sqlmodel import select
 from app.agent import Conversation, clinic_now
 from app.clinic import CLINIC_CITY, CLINIC_NAME, DENTISTS, HOURS, SERVICES, SLOT_MINUTES
 from app.db import new_session
+from app.guard import OUTPUT_REPLACEMENT
 from app.models import Appointment
 from app.prompts import GREETING
+from app.voice.speech_text import SentenceSplitter
 
 router = APIRouter(prefix="/api")
 
@@ -44,7 +47,30 @@ async def send_message(request: Request, session_id: str, body: Message) -> dict
     error = next((e["message"] for e in events if e["type"] == "error"), None)
     if error:
         raise HTTPException(502, f"The language model call failed: {error}")
-    return {"reply": events[-1]["text"], "events": [e for e in events if e["type"] != "text"]}
+    reply = events[-1]["text"]
+    events = [e for e in events if e["type"] != "text"]
+    refused = any(e["type"] == "guardrail" and not e["allowed"] for e in events)
+    guard = request.app.state.receptionist.guard
+    if guard and reply and not refused:
+        reply = await _screen(guard, conversation, body.text.strip(), reply, events)
+    return {"reply": reply, "events": events}
+
+
+async def _screen(guard, conversation: Conversation, user_text: str, reply: str, events: list[dict]) -> str:
+    """The output rail, sentence by sentence as the voice layer does it, but all at once since nothing has been
+    said yet. Returns the reply cut at the first blocked sentence, followed by the replacement."""
+    splitter = SentenceSplitter()
+    sentences = [*splitter.push(reply), *filter(None, [splitter.flush()])]
+    so_far = [" ".join(sentences[: n + 1]) for n in range(len(sentences))]
+    verdicts = await asyncio.gather(*(guard.check_output(user_text, text) for text in so_far))
+    for n, verdict in enumerate(verdicts):
+        events.append({"type": "guardrail", "stage": "output", "allowed": verdict.allowed, "rail": verdict.rail})
+        events[-1] |= {"ms": verdict.ms, "text": sentences[n]}
+        if not verdict.allowed:
+            said = " ".join(sentences[:n])
+            conversation.withdraw(said, OUTPUT_REPLACEMENT)
+            return f"{said} {OUTPUT_REPLACEMENT}".strip()
+    return reply
 
 
 @router.get("/appointments")

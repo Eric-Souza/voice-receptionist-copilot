@@ -45,6 +45,25 @@ describe("callReducer", () => {
     expect(state.change).toEqual({ id: 7, action: "booked", start: "2026-10-29T08:00", seq: 1 });
   });
 
+  it("keeps each turn's guardrail verdicts, in order", () => {
+    const state = play([
+      ...GREETED,
+      [1000, { type: "vad", speaking: false }],
+      [1300, { type: "transcript", text: "My tooth hurts" }],
+      [1600, { type: "guardrail", stage: "input", allowed: true, rail: null, ms: 240, waited_ms: 0 }],
+      [2100, { type: "guardrail", stage: "output", allowed: true, rail: null, ms: 210, text: "Sorry to hear that." }],
+      [2400, { type: "guardrail", stage: "output", allowed: false, rail: "self check output", ms: 230, text: "Take ibuprofen." }],
+      [2500, { type: "turn_done", text: "Sorry to hear that. I'm not able to advise on that.", timings: {} }],
+    ]);
+    const turn = state.turns[1];
+    expect(turn.guards.map((g) => [g.stage, g.allowed])).toEqual([
+      ["input", true],
+      ["output", true],
+      ["output", false],
+    ]);
+    expect(turn.guards[2]).not.toHaveProperty("type");
+  });
+
   it("ignores noise and only flags changes from confirm_action", () => {
     const state = play([
       ...GREETED,

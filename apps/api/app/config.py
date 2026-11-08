@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     # One JSON line per voice turn with its timings; "" turns it off
     voice_turn_log: str = str(REPO_ROOT / "data" / "voice-turns.jsonl")
 
+    # Guardrails (app/guard.py): NeMo input and output rails on Groq, whichever provider runs the conversation
+    guardrails_enabled: bool = True
+    # The self-check model; its own free-tier quota, and no reasoning keeps a check around 200 ms
+    guard_model: str = "qwen/qwen3.8-27b"
+    guard_reasoning_effort: str = "none"
+    prompt_guard_model: str = "meta-llama/llama-prompt-guard-2-86m"
+    # Prompt Guard's attack probability that blocks a caller turn
+    prompt_guard_threshold: float = 0.5
+    # When a check itself fails (a 429, a timeout), let the turn through rather than refuse it
+    guardrails_fail_open: bool = True
+
     database_url: str = f"sqlite:///{(REPO_ROOT / 'data' / 'clinic.db').as_posix()}"
     clinic_timezone: str = "America/Chicago"
 

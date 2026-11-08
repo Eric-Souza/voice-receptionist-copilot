@@ -1,6 +1,8 @@
+import asyncio
 import json
 from typing import Any
 
+from app.guard import Verdict
 from app.llm import Chunk, ToolCall
 
 
@@ -43,3 +45,25 @@ class FlakyModel(ScriptedModel):
             raise RuntimeError("400 tool_use_failed")
         async for chunk in super().stream(messages, tools):
             yield chunk
+
+
+class FakeGuard:
+    """Blocks caller turns and reply text containing a marker word, after an optional delay."""
+
+    def __init__(self, block_input: str = "", block_output: str = "", delay: float = 0):
+        self.block_input, self.block_output, self.delay = block_input, block_output, delay
+        self.inputs: list[str] = []
+        self.outputs: list[str] = []
+
+    async def check_input(self, text):
+        self.inputs.append(text)
+        return await self._verdict(text, self.block_input, "self check input")
+
+    async def check_output(self, user_text, reply):
+        self.outputs.append(reply)
+        return await self._verdict(reply, self.block_output, "self check output")
+
+    async def _verdict(self, text, marker, rail):
+        await asyncio.sleep(self.delay)
+        blocked = bool(marker) and marker in text
+        return Verdict(not blocked, rail if blocked else None, round(self.delay * 1000))

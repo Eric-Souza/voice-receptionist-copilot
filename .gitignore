@@ -9,12 +9,15 @@ __pycache__/
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Env and data
 .env
 data/*.db
 data/*.jsonl
 apps/api/models/
+# Eval logs (the results themselves are kept)
+apps/api/evals/results/*.log
 
 # Caller recordings for testing the web app without a mic (made with Kokoro)
 apps/web/public/samples/

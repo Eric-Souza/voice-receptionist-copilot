@@ -1,0 +1,9 @@
+define bot refuse to respond
+  "I'm sorry, I can't help with that."
+
+define flow prompt guard check input
+  $is_jailbreak = execute prompt_guard_check(text=$user_message)
+
+  if $is_jailbreak
+    bot refuse to respond
+    stop

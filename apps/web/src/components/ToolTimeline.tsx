@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ToolCall, Turn } from "../lib/callState";
+import type { GuardCheck } from "../lib/types";
 import { Panel } from "./Panel";
 
 const TOOL_STYLE: Record<string, string> = {
@@ -16,19 +17,23 @@ const TOOL_STYLE: Record<string, string> = {
 const seconds = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 2 : 1)} s`;
 
 export function ToolTimeline({ turns }: { turns: Turn[] }) {
-  const withTools = turns.filter((t) => t.tools.length);
+  const withTools = turns.filter((t) => t.tools.length || t.guards.length);
   const end = useRef<HTMLDivElement>(null);
-  const count = withTools.reduce((n, t) => n + t.tools.length + (t.tools.at(-1)?.result ? 1 : 0), 0);
+  const count = withTools.reduce(
+    (n, t) => n + t.tools.length + t.guards.length + (t.tools.at(-1)?.result ? 1 : 0),
+    0,
+  );
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [count]);
 
   return (
-    <Panel title="Tool calls" className="h-[28rem]">
+    <Panel title="Tool calls and guardrails" className="h-[28rem]">
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {withTools.length === 0 && (
           <p className="pt-16 text-center text-sm text-slate-400">
-            The tools Sofia uses (availability, booking, confirming) show up here as she calls them.
+            The tools Sofia uses (availability, booking, confirming) show up here as she calls them, with the
+            guardrail checks on what you say and what she says.
           </p>
         )}
         {withTools.map((turn) => (
@@ -42,7 +47,7 @@ export function ToolTimeline({ turns }: { turns: Turn[] }) {
 
 function TurnTools({ turn }: { turn: Turn }) {
   // One shared scale per turn: from the end of the caller's speech to the end of the reply
-  const lastTool = Math.max(...turn.tools.map((c) => c.calledAt + (c.ms ?? 0)));
+  const lastTool = Math.max(0, ...turn.tools.map((c) => c.calledAt + (c.ms ?? 0)));
   const span = Math.max(turn.timings?.total_ms ?? 0, lastTool, 1);
   const pct = (ms: number) => `${Math.min(100, (ms / span) * 100)}%`;
   const firstAudio = turn.timings?.first_audio_ms;
@@ -50,6 +55,7 @@ function TurnTools({ turn }: { turn: Turn }) {
   return (
     <div className="space-y-1.5">
       <div className="truncate text-xs text-slate-500">“{turn.caller?.text}”</div>
+      {turn.guards.length > 0 && <Guards checks={turn.guards} />}
       {turn.tools.map((call) => (
         <div key={call.id} className="rounded-lg border border-slate-100 bg-slate-50/60 p-2">
           <div className="flex items-baseline justify-between gap-2">
@@ -69,6 +75,34 @@ function TurnTools({ turn }: { turn: Turn }) {
           </div>
           <Args call={call} />
         </div>
+      ))}
+    </div>
+  );
+}
+
+/** One chip per guardrail check: the input check, then each sentence Sofia was about to say. */
+function Guards({ checks }: { checks: GuardCheck[] }) {
+  const input = checks.find((g) => g.stage === "input");
+  const outputs = checks.filter((g) => g.stage === "output");
+  const chip = (g: GuardCheck) =>
+    g.error ? "bg-amber-100 text-amber-800" : g.allowed ? "bg-emerald-50 text-emerald-700" : "bg-violet-100 text-violet-800";
+  const label = (g: GuardCheck) =>
+    `${g.allowed ? (g.error ? "skipped" : "passed") : `blocked by ${g.rail}`} · ${g.ms} ms` +
+    (g.waited_ms ? `, held the reply ${g.waited_ms} ms` : "") +
+    (g.text ? `: “${g.text}”` : "") +
+    (g.error ? ` (${g.error})` : "");
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-100 bg-slate-50/60 p-2 text-[11px]">
+      <span className="mr-1 font-semibold text-slate-700">🛡 Guardrails</span>
+      {input && (
+        <span className={`rounded px-1.5 py-0.5 font-mono ${chip(input)}`} title={label(input)}>
+          in {input.allowed ? "✓" : "✗"} {input.ms} ms
+        </span>
+      )}
+      {outputs.map((g, n) => (
+        <span key={n} className={`rounded px-1.5 py-0.5 font-mono ${chip(g)}`} title={label(g)}>
+          out {g.allowed ? "✓" : "✗"} {g.ms} ms
+        </span>
       ))}
     </div>
   );

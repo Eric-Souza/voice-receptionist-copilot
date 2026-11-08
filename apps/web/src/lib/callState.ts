@@ -1,7 +1,7 @@
 // Folds the server's event stream into what the UI shows: one entry per exchange, with its tool calls and timings.
 // Pure, so it's unit-tested without a browser; `at` is the client clock (performance.now()) when an event arrived.
 
-import type { ServerEvent, Timings } from "./types";
+import type { GuardCheck, ServerEvent, Timings } from "./types";
 
 export interface ToolCall {
   id: string;
@@ -21,6 +21,7 @@ export interface Turn {
   status: "replying" | "done" | "interrupted" | "failed";
   heard?: string; // when interrupted: what the caller heard before cutting in
   tools: ToolCall[];
+  guards: GuardCheck[]; // guardrail verdicts, in order: the input check, then one per sentence
   timings?: Timings;
   error?: string;
   speechEndedAt: number; // client clock
@@ -92,6 +93,7 @@ export function callReducer(state: CallState, action: CallAction): CallState {
         sofia: "",
         status: "replying",
         tools: [],
+        guards: [],
         speechEndedAt: state.speechEndedAt ?? at,
       };
       // (The caller got through, so an earlier "transcription failed" no longer applies)
@@ -109,6 +111,7 @@ export function callReducer(state: CallState, action: CallAction): CallState {
           sofia: event.text,
           status: "done",
           tools: [],
+          guards: [],
           speechEndedAt: at,
         };
         return { ...state, turns: [...state.turns, greeting], nextId: state.nextId + 1 };
@@ -116,6 +119,11 @@ export function callReducer(state: CallState, action: CallAction): CallState {
       if (event.kind === "filler") return updateLast(state, (t) => ({ ...t, filler: event.text }));
       if (event.kind === "apology") return updateLast(state, (t) => ({ ...t, sofia: t.sofia || event.text }));
       return state;
+
+    case "guardrail": {
+      const { type: _, ...check } = event;
+      return updateLast(state, (t) => ({ ...t, guards: [...t.guards, check] }));
+    }
 
     case "tool_call":
       return updateLast(state, (t) => ({

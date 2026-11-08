@@ -58,11 +58,23 @@ function SofiaLine({ turn }: { turn: Turn }) {
       {turn.status === "interrupted" && (
         <div className="text-xs text-amber-700">✋ You cut in</div>
       )}
+      <GuardNote turn={turn} />
       {turn.error && (
         <div className="line-clamp-2 max-w-[85%] text-xs text-rose-700" title={turn.error}>
           ⚠ {/\b429\b/.test(turn.error) ? "The language model is rate-limited right now (Groq free tier)" : turn.error}
         </div>
       )}
+    </div>
+  );
+}
+
+function GuardNote({ turn }: { turn: Turn }) {
+  const blocked = turn.guards.find((g) => !g.allowed);
+  if (!blocked) return null;
+  const what = blocked.stage === "input" ? "Your request was blocked" : "A sentence was withheld and replaced";
+  return (
+    <div className="text-xs text-violet-700" title={blocked.rail ?? undefined}>
+      🛡 {what} by the {blocked.stage} guardrail ({blocked.rail})
     </div>
   );
 }

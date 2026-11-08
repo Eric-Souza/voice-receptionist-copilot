@@ -1,0 +1,13 @@
+# NeMo Guardrails config for Sofia. Only input and output rails: the agent loop in app/agent.py stays in charge
+# of the conversation, and app/guard.py calls these rails with check_async() around it.
+# The LLM for the self checks is passed in from code (see app/guard.py), so no API key lives here.
+rails:
+  input:
+    # Both checks at once: the turn waits for the slower one instead of the sum
+    parallel: true
+    flows:
+      - prompt guard check input
+      - self check input
+  output:
+    flows:
+      - self check output

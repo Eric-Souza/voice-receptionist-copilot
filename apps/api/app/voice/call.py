@@ -11,9 +11,13 @@ The WebSocket protocol (/ws/voice):
     {"type": "transcript", "text"}                  what Whisper heard ("" if it was just noise)
     {"type": "reply", "delta"}                      the reply text as the model streams it
     {"type": "tool_call", ...}, {"type": "tool_result", ...}
+    {"type": "guardrail", "stage", "allowed", "rail", "ms", ...}
+                                                    a guardrail verdict: "input" once per turn, "output" per
+                                                    sentence before it is spoken (see app/guard.py)
     {"type": "audio", "text", "bytes", "kind"}      the next binary message is this sentence; kind is "reply",
-                                                    "greeting", "apology" or "filler" (a "one moment" said
-                                                    while a tool runs)
+                                                    "greeting", "apology", "filler" (a "one moment" said
+                                                    while a tool runs) or "guardrail" (said instead of a
+                                                    blocked sentence)
     {"type": "interrupt", "heard", "transcribing"}  the caller talked over Sofia: stop playback now.
                                                     transcribing: they cut in before their last words
                                                     were transcribed, which come back merged with the rest
@@ -23,6 +27,10 @@ The WebSocket protocol (/ws/voice):
 Barge-in: the server keeps listening while Sofia thinks and talks. Once the caller has talked over her for
 barge_in_ms, the reply is cancelled, the browser is told to stop playing, and the history keeps only the
 sentences that had started playing. The browser's echo cancellation keeps Sofia from interrupting herself.
+
+Guardrails: each sentence of the reply is checked by the output rail while it is being synthesized, so the
+check adds no time unless it is slower than the synthesis. A blocked sentence is never sent; Sofia says
+OUTPUT_REPLACEMENT instead, the rest of the reply is dropped and the history keeps what she actually said.
 """
 
 import asyncio
@@ -31,7 +39,7 @@ import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +48,7 @@ import numpy as np
 
 from app.agent import Conversation, Receptionist
 from app.config import get_settings
+from app.guard import INPUT_REFUSAL, OUTPUT_REPLACEMENT, is_acknowledgement
 from app.prompts import GREETING
 from app.voice.audio import pcm16_to_float
 from app.voice.speech_text import SentenceSplitter, speakable
@@ -59,6 +68,9 @@ class VoiceServices:
     vad: Callable[[], SpeechProb]  # a fresh scorer per call, since Silero keeps state
     stt: Transcriber
     tts: Synthesizer
+    # Audio for the fixed lines (greeting, refusals), synthesized once: a refusal opens with a long sentence that
+    # would otherwise take Kokoro most of a second, after the check already knows the answer
+    fixed_audio: dict[str, bytes] = field(default_factory=dict)
 
 
 @dataclass
@@ -93,6 +105,7 @@ class VoiceCall:
         # An audio event and its PCM must go out back to back, so all sends take this lock
         self._send_lock = asyncio.Lock()
         self.turn: asyncio.Task | None = None
+        self._warming: asyncio.Task | None = None
         # What has been sent for the current turn, and when the browser will be done playing it
         self.sent: list[Sent] = []
         self.playing_until = 0.0
@@ -105,6 +118,8 @@ class VoiceCall:
         self.fillers = 0
         self._timings: dict[str, Any] | None = None
         self._heard_at = 0.0
+        self.screen_output = True  # run the output rail on this turn's sentences (not on a refusal)
+        self.withheld: str | None = None  # set to what was said before a sentence the output rail blocked
 
     @property
     def sofia_active(self) -> bool:
@@ -118,6 +133,17 @@ class VoiceCall:
     async def start(self) -> None:
         await self.emit({"type": "ready", "sample_rate": self.services.tts.sample_rate})
         self.turn = asyncio.create_task(self._speak(GREETING, "greeting"))
+        if self.receptionist.guard:
+            self._warming = asyncio.create_task(self._warm_fixed_lines())
+
+    async def _warm_fixed_lines(self) -> None:
+        """Synthesize the refusals while the greeting plays and the caller talks, so a block is answered at once."""
+        await asyncio.wait({self.turn})  # after the greeting, however it ended
+        # Cut the way they'll be spoken: the input refusal streams as a reply, the output replacement goes whole
+        splitter = SentenceSplitter()
+        for piece in [*splitter.push(INPUT_REFUSAL), splitter.flush(), OUTPUT_REPLACEMENT]:
+            if piece and piece not in self.services.fixed_audio:
+                await self._synthesize(piece)
 
     async def feed(self, data: bytes) -> None:
         for event in self.segmenter.feed(pcm16_to_float(data)):
@@ -132,6 +158,8 @@ class VoiceCall:
             await self._barge_in()
 
     async def close(self) -> None:
+        if self._warming:
+            self._warming.cancel()
         await self._cancel_turn()
 
     async def emit(self, event: dict[str, Any]) -> None:
@@ -189,15 +217,26 @@ class VoiceCall:
             return
 
         sentences: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
-        speaker = asyncio.create_task(self._speak_queue(sentences))
+        self.screen_output, self.withheld = True, None
+        speaker = asyncio.create_task(self._speak_queue(sentences, transcript.text))
         splitter, reply, failed, tools = SentenceSplitter(), "", False, []
         self.replying = True
         try:
             async with contextlib.aclosing(self.receptionist.respond(self.conversation, transcript.text)) as events:
                 async for event in events:
-                    if event["type"] == "text":
+                    if speaker.done():
+                        break  # the output rail stopped the reply
+                    if event["type"] == "guardrail":
+                        timings["input_guard_ms"], timings["input_guard_wait_ms"] = event["ms"], event["waited_ms"]
+                        if not event["allowed"]:
+                            timings["blocked"] = event["rail"]
+                            self.screen_output = False
+                        await self.emit(event)
+                    elif event["type"] == "text":
                         timings.setdefault("llm_first_text_ms", _ms(self._heard_at))
-                        await self.emit({"type": "reply", "delta": event["delta"]})
+                        if not self._screening:
+                            # (When screened, each sentence is shown once it passes, so blocked text never is)
+                            await self.emit({"type": "reply", "delta": event["delta"]})
                         for sentence in splitter.push(event["delta"]):
                             sentences.put_nowait((sentence, "reply"))
                     elif event["type"] in ("tool_call", "tool_result"):
@@ -213,10 +252,13 @@ class VoiceCall:
                         reply = event["text"]
             if rest := splitter.flush():
                 sentences.put_nowait((rest, "reply"))
-            if failed or not reply:
+            if (failed or not reply) and not speaker.done():
                 sentences.put_nowait((APOLOGY, "apology"))
             sentences.put_nowait(None)
             await speaker
+            if self.withheld is not None:
+                self.conversation.withdraw(self.withheld, OUTPUT_REPLACEMENT)
+                reply = f"{self.withheld} {OUTPUT_REPLACEMENT}".strip()
         except asyncio.CancelledError:
             speaker.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -232,16 +274,60 @@ class VoiceCall:
         self.fillers += 1
         return FILLERS[(self.fillers - 1) % len(FILLERS)]
 
-    async def _speak_queue(self, sentences: asyncio.Queue[tuple[str, str] | None]) -> None:
+    @property
+    def _screening(self) -> bool:
+        return self.receptionist.guard is not None and self.screen_output
+
+    async def _speak_queue(self, sentences: asyncio.Queue[tuple[str, str] | None], user_text: str) -> None:
+        guard = self.receptionist.guard
+        said: list[str] = []
         while (item := await sentences.get()) is not None:
-            await self._speak(*item)
+            text, kind = item
+            if kind != "reply" or guard is None or not self.screen_output:
+                await self._speak(text, kind)
+                continue
+            if not said and is_acknowledgement(text):
+                said.append(text)
+                await self.emit({"type": "reply", "delta": f"{text} "})
+                await self._speak(text, kind)
+                continue
+            pcm, verdict = await asyncio.gather(
+                self._synthesize(text), guard.check_output(user_text, " ".join([*said, text]))
+            )
+            if self._timings is not None:
+                self._timings.setdefault("output_guard_ms", []).append(verdict.ms)
+            event = {"type": "guardrail", "stage": "output", "allowed": verdict.allowed, "rail": verdict.rail}
+            await self.emit(event | {"ms": verdict.ms, "text": text})
+            if not verdict.allowed:
+                if self._timings is not None:
+                    self._timings["blocked"] = verdict.rail
+                self.withheld = " ".join(said)
+                await self.emit({"type": "reply", "delta": OUTPUT_REPLACEMENT})
+                await self._speak(OUTPUT_REPLACEMENT, "guardrail")
+                return
+            said.append(text)
+            await self.emit({"type": "reply", "delta": f"{text} "})
+            if pcm is not None:
+                await self._send_audio(text, kind, pcm)
 
     async def _speak(self, text: str, kind: str) -> None:
+        if (pcm := await self._synthesize(text)) is not None:
+            await self._send_audio(text, kind, pcm)
+
+    async def _synthesize(self, text: str) -> bytes | None:
+        fixed = text in GREETING or text in INPUT_REFUSAL or text in OUTPUT_REPLACEMENT
+        if fixed and text in self.services.fixed_audio:
+            return self.services.fixed_audio[text]
         try:
             pcm = await self.services.tts.synthesize(speakable(text))
+            if fixed:
+                self.services.fixed_audio[text] = pcm
+            return pcm
         except Exception:
             log.exception("Speech synthesis failed for %r", text)
-            return
+            return None
+
+    async def _send_audio(self, text: str, kind: str, pcm: bytes) -> None:
         async with self._send_lock:
             now = time.perf_counter()
             if self._timings is not None and "first_audio_ms" not in self._timings:
